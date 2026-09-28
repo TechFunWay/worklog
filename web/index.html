@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#F97B1C" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="工记" />
+    <title>工记</title>
+    <script>
+      // 服务端（server/server/server.go serveSPA）在返回入口 HTML 时把
+      // __FNOS_GATEWAY_FLAG__ 替换成「这次文档请求是否来自飞牛网关 socket」，
+      // 所以开发服务器 / 普通构建没替换时就是 false，不会报错。
+      // 前端必须知道这个答案：网关域上**不能带应用自己的 Authorization**——飞牛
+      // 接入层会把它当成自己的会话 token，认不出就直接回 200 "invalid token"，
+      // 请求根本到不了应用（「登录后刷新就掉登录态」就是这么来的）。网关域的
+      // 登录态由服务端用网关注入的 X-Trim-* 身份解析（见 server/middleware）。
+      window.__FNOS_GATEWAY__ = "__FNOS_GATEWAY_FLAG__" === "true";
+    </script>
+    <script>
+      // Apply the saved theme BEFORE any CSS or Vue mounts so the first paint
+      // already reflects the user's choice — otherwise a system-default
+      // light flash cuts in before Pinia's theme store runs apply().
+      (function () {
+        try {
+          var mode = localStorage.getItem('worklog-theme-mode') || 'system';
+          var brand = localStorage.getItem('worklog-theme-brand') || 'default';
+          var dark = mode === 'dark' ||
+            (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var root = document.documentElement;
+          root.classList.toggle('dark', dark);
+          if (brand !== 'default') root.classList.add('brand-' + brand);
+        } catch (e) { /* private mode or storage off — fall back to defaults */ }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

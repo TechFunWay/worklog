@@ -1,0 +1,42 @@
+# 部署文件（latest 自动更新，随发行产物分发）
+# 使用 latest 标签镜像，配合 Watchtower 自动拉取新版本并重启容器，保持始终最新。
+#
+# 用法：
+#   cd release/<版本>
+#   docker compose -f docker-compose.latest.yml up -d
+#
+# 镜像说明：
+#   - latest 模式需要镜像可从仓库拉取；本地构建的 latest 镜像不会自动更新，
+#     需先将 techfunways/worklog:latest 推送到镜像仓库
+#
+# Watchtower 默认每 24 小时（86400 秒）检查一次更新，仅监控 techfunway-worklog 容器，
+# 更新后自动清理旧镜像。调整检查频率请修改 watchtower 的 --interval 参数（单位：秒）。
+services:
+  techfunway-worklog:
+    image: techfunways/worklog:latest
+    container_name: techfunway-worklog
+    ports:
+      - "8909:8909"
+    volumes:
+      # 数据库、上传文件、日志和配置均持久化在此卷中。
+      - techfunway-worklog-data:/app/data
+    environment:
+      - ENV=release
+      - DATA_DIR=/app/data
+    command: ["-data-dir", "/app/data", "-web-dir", "./static/dist"]
+    restart: unless-stopped
+
+  # Watchtower：监控工记容器，发现新镜像自动拉取并滚动重启。
+  watchtower:
+    image: containrrr/watchtower
+    container_name: techfunway-worklog-watchtower
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    # --cleanup：更新后删除旧镜像
+    # --interval 86400：检查间隔（秒），86400 = 24 小时
+    # techfunway-worklog：仅监控该容器，不影响宿主机上其他容器
+    command: --cleanup --interval 86400 techfunway-worklog
+    restart: unless-stopped
+
+volumes:
+  techfunway-worklog-data:

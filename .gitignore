@@ -1,0 +1,74 @@
+# Binaries
+# /server/worklog 本意是忽略编译产物，但会连同同名源码目录一起忽略，
+# 导致 server/worklog/ 下新增文件被 git 静默隐身；先忽略、再用否定规则
+# 把源码目录及其内容重新纳入。
+/server/worklog
+!/server/worklog/
+!/server/worklog/**
+/server/worklog-*
+/gongji
+/worklog
+worklog-linux-*
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Data
+server/data/
+data/
+dev/data/
+*.db
+*.db-journal
+
+# Frontend dependencies and build output
+web/node_modules/
+web/dist/
+
+# Compiled frontend served by the backend (run `make build-frontend` to regenerate)
+server/static/dist/
+
+# Agent / IDE side artifacts (kept out of git)
+.omo/
+.playwright-mcp/
+memory/
+.claude/*
+!.claude/skills/
+.opencode/
+
+# Build output
+dev/
+build/
+release/
+dist/
+*.tar.gz
+*.zip
+*.fpk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# ---------- 本地临时目录 ----------
+# 临时测试与调试文件统一放这里，目录内内容不入库（仅保留 .gitkeep 占位）
+tmp/*
+!tmp/.gitkeep
+
+# AI 工具本地目录
+.zcode/
+.mimocode/

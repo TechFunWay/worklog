@@ -1,0 +1,14 @@
+{
+    ".url": {
+        "techfunway-worklog.main": {
+            "title": "工记",
+            "icon": "images/icon_{0}.png",
+            "type": "url",
+            "gatewayPrefix": "/app/techfunway-worklog",
+            "gatewaySocket": "app.sock",
+            "url": "/app/techfunway-worklog",
+            "allUsers": true,
+            "protocol": ""
+        }
+    }
+}
