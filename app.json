@@ -1,0 +1,21 @@
+{
+  "appname": "techfunway-worklog",
+  "display_name": "工记",
+  "version": "0.2.0",
+  "desc": "记工记账应用 — 按天/按时/计件记工，老板/组长/员工三种角色与班组协作，考勤日历，工资自动计算，借支与结算管理，一键生成工资条，支持飞牛 NAS 账号登录",
+  "author": "TechFunWay",
+  "website": "https://techfunway.wycto.cn",
+  "port": 8909,
+  "docker": {
+    "image": "techfunways/worklog",
+    "container": "techfunway-worklog",
+    "tag_prefix": "worklog"
+  },
+  "fnos": {
+    "os_min_version": "1.0.0",
+    "service_port": 8909,
+    "ctl_stop": true,
+    "checkport": false,
+    "disable_authorization_path": false
+  }
+}
