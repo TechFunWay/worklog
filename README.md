@@ -5,6 +5,44 @@
 
 在飞牛 fnOS 上可通过 NAS 账号一键登录；也支持 Docker 与裸二进制部署。
 
+## 界面预览
+
+> 以下截图为 v0.2.0 实拍，数据为演示用示例数据。
+
+**工作台**：本月应付、待结算与借支提醒一目了然
+
+![工作台](images/screenshots/worklog-dashboard.png)
+
+**记工**：点工 / 点时 / 计件三种录入，计件项目自动带出默认单价
+
+![记工](images/screenshots/worklog-record.png)
+
+**考勤表**：整月出勤日历与当月工钱汇总
+
+![考勤表](images/screenshots/worklog-attendance.png)
+
+**结算**：未结算汇总按人核对应发、借支与净应付
+
+![结算](images/screenshots/worklog-settlement.png)
+
+**统计**：月度统计与自定义时间段查询
+
+![统计](images/screenshots/worklog-stats.png)
+
+**深色主题**：工地夜间也能看清记工明细
+
+![深色主题](images/screenshots/worklog-dashboard-dark.png)
+
+**手机端**（390 × 844）：记工与考勤
+
+<p>
+  <img src="images/screenshots/worklog-mobile-record.png" width="300" alt="手机端记工" />
+  <img src="images/screenshots/worklog-mobile-attendance.png" width="300" alt="手机端考勤" />
+</p>
+
+其余截图（手机端工作台、工人列表、借支、数据备份）见
+[images/screenshots/](images/screenshots/)，同一套图也随发行目录分发（`release/<版本>/screenshots-<版本>.zip`）。
+
 ## 功能
 
 ### 记工（核心）
