@@ -1,0 +1,40 @@
+name: 同步到 Gitee
+
+# 发版库以 GitHub 为唯一源：每次 push 到 main 或打 v* 标签后，
+# 自动把分支与标签镜像到 Gitee 同名仓库（TechFunWay/worklog）。
+# 只同步代码与标签；Release 附件仍按发版流程在两侧分别上传。
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: 推送分支与标签到 Gitee
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Gitee 凭据
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "缺少密钥 GITEE_TOKEN" >&2
+            exit 1
+          fi
+          git config --global url."https://wycto:${GITEE_TOKEN}@gitee.com/".insteadOf "https://gitee.com/"
+          git remote add gitee https://gitee.com/TechFunWay/worklog.git
+
+      - name: 同步分支
+        run: git push --force --prune gitee 'refs/heads/*:refs/heads/*'
+
+      - name: 同步标签
+        run: git push --force --prune gitee 'refs/tags/*:refs/tags/*'
