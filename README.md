@@ -5,6 +5,18 @@
 
 在飞牛 fnOS 上可通过 NAS 账号一键登录；也支持 Docker 与裸二进制部署。
 
+## 下载与安装
+
+| 渠道 | 获取方式 |
+|---|---|
+| GitHub Releases | <https://github.com/TechFunWay/worklog/releases> —— 各平台压缩包、飞牛 `fpk` 安装包与 `docker-compose.yml` |
+| Gitee 发行版 | <https://gitee.com/TechFunWay/worklog/releases> —— 国内镜像，产物与 GitHub 一致 |
+| Docker 镜像 | `docker pull techfunways/worklog:latest`（amd64 / arm64 多平台） |
+| 飞牛 fnOS | 在飞牛应用中心手动安装 Releases 里的 `.fpk` 安装包（amd64 / arm64） |
+| 官网介绍页 | <https://techfunway.wycto.cn/fnapp/worklog> |
+
+> 默认端口 `8909`；数据默认是挂载目录下的 SQLite 单文件，备份即拷贝，恢复支持上传本地备份文件。
+
 ## 界面预览
 
 > 以下截图为 v0.2.0 实拍，数据为演示用示例数据。
