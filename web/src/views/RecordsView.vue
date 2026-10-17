@@ -147,27 +147,35 @@
         </div>
 
         <div class="flex gap-2 pt-0.5 sm:pt-1">
-          <button v-if="editingId" class="btn-ghost flex-1 !text-red-500" @click="removeRecord">删除</button>
+          <button v-if="editingId" class="btn-ghost flex-1 !text-red-500" @click="askDeleteRecord(editingId)">删除</button>
+          <button class="btn-ghost flex-1" :disabled="saving" @click="editorOpen = false">取消</button>
           <button v-if="!editingId" class="btn-ghost flex-1" :disabled="saving" @click="saveRecord(true)">确认并再记一笔</button>
           <button class="btn-brand flex-1" :disabled="saving" @click="saveRecord(false)">{{ editingId ? '保存修改' : '确认记工' }}</button>
         </div>
 
         <!-- 当日已有记录 -->
         <div v-if="editingWorker && editingWorker.records.length > 0" class="pt-2 border-t border-border">
-          <div class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">当日已记 {{ editingWorker.record_count }} 笔 · 合计 {{ fmtMoney(editingWorker.amount_cents) }}</div>
+          <div class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">当日已记 {{ editingWorker.record_count }} 笔 · 合计 {{ fmtMoney(editingWorker.amount_cents) }} · 点记录可改，点右侧🗑可删</div>
           <div class="divide-y divide-border">
-            <button v-for="r in editingWorker.records" :key="r.id" class="w-full flex items-center justify-between py-2 text-left" @click="editRecord(r)">
+            <div v-for="r in editingWorker.records" :key="r.id" class="w-full flex items-center justify-between py-1.5 text-left cursor-pointer" @click="editRecord(r)">
               <span class="text-sm text-foreground">
                 <span class="badge bg-muted text-muted-foreground mr-1.5">{{ TYPE_LABELS[r.type] }}</span>
                 {{ r.quantity }}{{ r.type === 'day' ? ' 天' : r.type === 'hour' ? ' 时' : ' 件' }}
                 <span v-if="r.piece_name" class="text-muted-foreground">· {{ r.piece_name }}</span>
               </span>
-              <span class="text-sm font-semibold tabular-nums" :class="r.id === editingId ? 'text-brand-600' : ''">{{ fmtMoney(r.amount_cents) }}</span>
-            </button>
+              <span class="flex items-center gap-1.5 shrink-0">
+                <span class="text-sm font-semibold tabular-nums" :class="r.id === editingId ? 'text-brand-600' : ''">{{ fmtMoney(r.amount_cents) }}</span>
+                <button type="button" aria-label="删除这条记录" class="p-2 -mr-1.5 text-red-400 hover:text-red-500 transition-colors" @click.stop="askDeleteRecord(r.id!)">
+                  <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                </button>
+              </span>
+            </div>
           </div>
         </div>
       </div>
     </Modal>
+
+    <ConfirmDialog v-model="deleteConfirmOpen" title="删除记录" message="删除后当日合计、月度统计与工资都会同步更新。确定删除这条记录？" confirm-text="删除" confirm-type="danger" @confirm="removeRecord" />
 
     <Toast :message="toastMsg" :type="toastType" />
   </div>
@@ -175,9 +183,11 @@
 
 <script setup lang="ts">
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
 import PageHeader from '../components/PageHeader.vue'
 import SelectMenu from '../components/SelectMenu.vue'
 import Modal from '../components/Modal.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
 import {
   recordsByDate, createRecord, updateRecord, deleteRecord,
@@ -188,7 +198,16 @@ import { fmtMoney, TYPE_LABELS, todayStr, addDays } from '../utils/format'
 import { useWorklogStore } from '../stores/worklog'
 
 const store = useWorklogStore()
+const route = useRoute()
 const isWorker = computed(() => store.isWorker)
+
+// 从考勤表点日期进来时带 ?date=YYYY-MM-DD，记工页要直接落在那一天；
+// 之前忽略了这个参数，所以粉丝反馈“点日期记工没反应、还停在今天”。
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+function queryDate(): string {
+  const raw = typeof route.query.date === 'string' ? route.query.date : ''
+  return DATE_RE.test(raw) ? raw : ''
+}
 
 const rows = ref<DayWorkerRow[]>([])
 const projects = ref<Project[]>([])
@@ -202,7 +221,7 @@ const projectOptions = computed(() => [
   ...projects.value.map(p => ({ value: p.id as number, label: p.name })),
 ])
 const pieceItems = ref<PieceItem[]>([])
-const selectedDate = ref(todayStr())
+const selectedDate = ref(queryDate() || todayStr())
 const editorOpen = ref(false)
 const editingWorker = ref<DayWorkerRow | null>(null)
 const editingId = ref<number | null>(null)
@@ -210,6 +229,9 @@ const saving = ref(false)
 const toastMsg = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const dateStrip = ref<HTMLElement | null>(null)
+// 删除确认（替代原生 confirm）：deleteTargetId 为待删记录，确认后由 removeRecord 执行
+const deleteConfirmOpen = ref(false)
+const deleteTargetId = ref<number | null>(null)
 
 const types = [
   { value: 'day', label: '点工（天）', icon: '📅' },
@@ -303,6 +325,13 @@ function selectDate(d: string) {
 
 watch(selectedDate, loadDay)
 
+// 已在记工页时再从考勤表点另一个日期（同路由仅 query 变化），组件不会重建，
+// 需要监听 query 同步过去。
+watch(() => route.query.date, (value) => {
+  const raw = typeof value === 'string' ? value : ''
+  if (DATE_RE.test(raw) && raw !== selectedDate.value) selectedDate.value = raw
+})
+
 function shiftDays(delta: number) {
   selectedDate.value = addDays(selectedDate.value, delta)
 }
@@ -393,16 +422,23 @@ async function saveRecord(keepOpen: boolean) {
 }
 
 async function removeRecord() {
-  if (!editingId.value) return
-  if (!confirm('确定删除这条记录？')) return
+  const id = deleteTargetId.value
+  if (!id) return
   try {
-    await deleteRecord(editingId.value)
+    await deleteRecord(id)
     toast('已删除')
     editorOpen.value = false
     await loadDay()
   } catch (e: any) {
     toast(e.response?.data?.message || '删除失败', 'error')
+  } finally {
+    deleteTargetId.value = null
   }
+}
+
+function askDeleteRecord(id: number) {
+  deleteTargetId.value = id
+  deleteConfirmOpen.value = true
 }
 
 onMounted(async () => {

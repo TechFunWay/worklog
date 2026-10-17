@@ -305,9 +305,13 @@ func NewRouter(cfg config.Config, db *gorm.DB, jwtSecret string) *gin.Engine {
 	r.Use(middleware.CORS(cfg.CORSOrigin))
 	r.Use(middleware.LimitJSONBody(1 << 20))
 
+	// gatewayPrefix 是网关部署下的应用路径前缀，作为应用自有会话 cookie 的
+	// Path；非网关部署为空串，cookie 相关逻辑全部跳过（直连端口行为不变）。
+	gatewayPrefix := ""
 	appGroup := r.Group("")
 	if cfg.FnOSApp {
-		appGroup = r.Group(strings.TrimSuffix(cfg.GatewayPrefix, "/"))
+		gatewayPrefix = strings.TrimSuffix(cfg.GatewayPrefix, "/")
+		appGroup = r.Group(gatewayPrefix)
 	}
 	api := appGroup.Group("/api")
 
@@ -358,7 +362,7 @@ func NewRouter(cfg config.Config, db *gorm.DB, jwtSecret string) *gin.Engine {
 	authGroup.POST("/upload", upload.HandleUpload(cfg.UploadDir))
 	appGroup.GET("/uploads/*filepath", upload.ServeUpload(cfg.UploadDir))
 
-	user.RegisterRoutes(publicGroup, optionalAuthGroup, authGroup, adminGroup, db, cfg.FnOSApp)
+	user.RegisterRoutes(publicGroup, optionalAuthGroup, authGroup, adminGroup, db, cfg.FnOSApp, gatewayPrefix)
 
 	// 复用匿名统计通道发送一次 donate_support 事件。
 	stats.RegisterRoutes(authGroup, db)

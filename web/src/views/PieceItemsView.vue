@@ -50,10 +50,14 @@
           <label class="text-sm font-medium text-foreground block mb-1.5">备注</label>
           <input v-model="form.note" class="input-field" placeholder="选填" />
         </div>
-        <button class="btn-brand w-full" :disabled="saving" @click="save">保存</button>
+        <div class="flex gap-3">
+          <button type="button" class="btn-ghost min-h-11 flex-1" :disabled="saving" @click="closeForm">取消</button>
+          <button type="button" class="btn-brand min-h-11 flex-1" :disabled="saving" @click="save">保存</button>
+        </div>
       </div>
     </Modal>
 
+    <ConfirmDialog v-model="confirmOpen" :title="confirmTitle" :message="confirmMessage" :confirm-text="confirmText" confirm-type="danger" @confirm="confirmAction()" />
     <Toast :message="toastMsg" :type="toastType" />
   </div>
 </template>
@@ -62,6 +66,7 @@
 import { ref, onMounted } from 'vue'
 import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
 import { listPieceItems, createPieceItem, updatePieceItem, deletePieceItem, type PieceItem } from '../api/worklog'
 import { fmtMoney, yuanToCents, centsToYuanInput } from '../utils/format'
@@ -87,10 +92,30 @@ function openForm(p?: PieceItem) {
   formOpen.value = true
 }
 
+// 取消：只关闭弹窗，不提交表单（保存中不允许关闭，与保存按钮同步禁用）
+function closeForm() {
+  if (saving.value) return
+  formOpen.value = false
+}
+
 function toast(msg: string, type: 'success' | 'error' = 'success') {
   toastMsg.value = msg
   toastType.value = type
   setTimeout(() => (toastMsg.value = ''), 3000)
+}
+
+// 通用确认弹窗（替代原生 confirm）
+const confirmOpen = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmText = ref('确认')
+const confirmAction = ref<() => void | Promise<void>>(() => {})
+function askConfirm(title: string, message: string, action: () => void | Promise<void>, text = '确认') {
+  confirmTitle.value = title
+  confirmMessage.value = message
+  confirmText.value = text
+  confirmAction.value = action
+  confirmOpen.value = true
 }
 
 async function save() {
@@ -121,15 +146,16 @@ async function toggle(p: PieceItem) {
   }
 }
 
-async function remove(p: PieceItem) {
-  if (!confirm(`确定删除计件项目「${p.name}」？`)) return
-  try {
-    await deletePieceItem(p.id!)
-    toast('已删除')
-    await load()
-  } catch (e: any) {
-    toast(e.response?.data?.message || '删除失败', 'error')
-  }
+function remove(p: PieceItem) {
+  askConfirm('删除计件项目', `确定删除计件项目「${p.name}」？`, async () => {
+    try {
+      await deletePieceItem(p.id!)
+      toast('已删除')
+      await load()
+    } catch (e: any) {
+      toast(e.response?.data?.message || '删除失败', 'error')
+    }
+  }, '删除')
 }
 
 onMounted(load)

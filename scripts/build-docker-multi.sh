@@ -1,6 +1,12 @@
 #!/bin/bash
-# 构建 docker 多平台合并镜像（linux/amd64 + linux/arm64），导出本地 OCI 归档，
+# 构建 docker 多平台合并镜像（linux/amd64 + linux/arm64），默认导出本地 OCI 归档，
 # 归档随 release/<版本>/ 发行目录分发，目标机器 docker load -i 即可用。
+#
+# 环境变量（默认都不开，保持"未经用户确认不推送远端"的约定）：
+#   PUSH=1      构建后把同一份合并 manifest 推到 Docker Hub（techfunways/worklog），
+#               tag 为 :<版本> 与 :latest，需先 docker login（账号须能写该命名空间）
+#   SKIP_OCI=1  跳过本地 OCI 归档（只推送时用，避免重打已随发行目录分发的归档）
+# 也支持 `--push` 作为 PUSH=1 的等价参数。
 #
 # 依赖 ./scripts/build-all.sh 先跑出两个 linux 平台压缩包（Dockerfile 直接用
 # 里面编译好的静态二进制与前端产物，不再在 buildx 里重编译，速度快且与
@@ -9,6 +15,12 @@ set -e
 
 PROJECT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 cd "$PROJECT_DIR"
+
+PUSH="${PUSH:-0}"
+SKIP_OCI="${SKIP_OCI:-0}"
+for arg in "$@"; do
+    [ "$arg" = "--push" ] && PUSH=1
+done
 
 VERSION=$(cat VERSION | tr -d '\n')
 [ -z "$VERSION" ] && echo "❌ 无法获取版本号" && exit 1
@@ -33,7 +45,7 @@ for arch in amd64 arm64; do
 done
 
 echo "============================================"
-echo "  Docker 多平台 OCI 归档 ${VERSION}"
+echo "  Docker 多平台镜像 ${VERSION}（OCI=${SKIP_OCI} 推送=${PUSH}）"
 echo "============================================"
 
 # 删除 .DS_Store
@@ -94,14 +106,31 @@ CMD ["-data-dir", "/app/data", "-web-dir", "./static/dist"]
 EOF
 
 # 导出为本地 OCI 归档（不推送 registry），随发行目录分发
-docker buildx build \
-    --builder "${BUILDER_NAME}" \
-    --platform linux/amd64,linux/arm64 \
-    --output "type=oci,dest=${OCI_FILE}" \
-    --build-arg VERSION=${VERSION} \
-    -t "${IMAGE_NAME}:${VERSION}" \
-    -t "${IMAGE_NAME}:latest" \
-    .
+if [ "${SKIP_OCI}" != "1" ]; then
+    docker buildx build \
+        --builder "${BUILDER_NAME}" \
+        --platform linux/amd64,linux/arm64 \
+        --output "type=oci,dest=${OCI_FILE}" \
+        --build-arg VERSION=${VERSION} \
+        -t "${IMAGE_NAME}:${VERSION}" \
+        -t "${IMAGE_NAME}:latest" \
+        .
+fi
+
+# PUSH=1：把同一份多平台合并 manifest 推到 Docker Hub（需已 docker login）
+if [ "${PUSH}" = "1" ]; then
+    echo ""
+    echo "🚀 推送多平台镜像到 Docker Hub: ${IMAGE_NAME}:${VERSION} / ${IMAGE_NAME}:latest"
+    echo ""
+    docker buildx build \
+        --builder "${BUILDER_NAME}" \
+        --platform linux/amd64,linux/arm64 \
+        --push \
+        --build-arg VERSION=${VERSION} \
+        -t "${IMAGE_NAME}:${VERSION}" \
+        -t "${IMAGE_NAME}:latest" \
+        .
+fi
 
 rm -f Dockerfile
 cd "${PROJECT_DIR}"
@@ -115,8 +144,9 @@ done
 docker buildx use default 2>/dev/null || true
 
 echo ""
-echo "✅ 多平台 OCI 归档完成: ${OCI_FILE}"
+[ "${SKIP_OCI}" = "1" ] || echo "✅ 多平台 OCI 归档完成: ${OCI_FILE}"
+[ "${PUSH}" = "1" ] && echo "✅ 已推送 Docker Hub: ${IMAGE_NAME}:${VERSION} / ${IMAGE_NAME}:latest（amd64 + arm64 合并 manifest）"
 echo ""
-echo "  目标机器载入: docker load -i ${APP_NAME}-${VERSION}-multiarch.oci.tar"
+[ "${SKIP_OCI}" = "1" ] || echo "  目标机器载入: docker load -i ${APP_NAME}-${VERSION}-multiarch.oci.tar"
 echo "  本地镜像: ${IMAGE_NAME}:${VERSION} / ${IMAGE_NAME}:latest（含合并 manifest）"
 echo ""

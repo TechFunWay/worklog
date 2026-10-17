@@ -9,6 +9,13 @@
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* app 手感：去掉点击高亮块与双击缩放延迟，禁止滚动链出白底 */
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior-y: contain;
+}
+
+button, a, input, select, textarea, label {
+  touch-action: manipulation;
 }
 
 /* iOS Safari zooms any focused input smaller than 16px. Keep form controls
@@ -28,7 +35,7 @@ body {
   background-image:
     radial-gradient(at 0% 0%, rgb(var(--color-brand-500) / 0.08) 0px, transparent 50%),
     radial-gradient(at 100% 0%, rgb(var(--color-accent) / 0.06) 0px, transparent 50%);
-  background-attachment: fixed;
+  /* 不用 background-attachment: fixed —— 手机 WebView 滚动时每帧重绘全屏渐变，掉帧大户 */
 }
 
 .dark body {
@@ -50,6 +57,29 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover {
   @apply bg-muted-foreground/50;
+}
+
+/* 手机端关闭毛玻璃：backdrop-blur 在滚动/键盘弹出时每帧对底层重新采样，是 WebView
+   掉帧主因。用近不透明表面替代（dark 下 70% → 94%），观感几乎无差；桌面端保留。
+   这里也兜住 AuthShell / 各视图里手写的 backdrop-blur-*。 */
+@media (max-width: 767px) {
+  .surface {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .dark .surface {
+    background-color: rgb(var(--color-surface) / 0.94);
+  }
+  /* 输入字号 16px：小于 16px 的输入框聚焦时 iOS/WebView 会自动放大整页，
+     表现为输入时闪跳（登录页已单独处理，这里兜住其余页面）。 */
+  .input-field, select.input-field, textarea.input-field {
+    font-size: 16px;
+  }
+  /* 隐藏滚动条：手机上用惯性滚动，滚动条突兀 */
+  ::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
 }
 
 @layer components {

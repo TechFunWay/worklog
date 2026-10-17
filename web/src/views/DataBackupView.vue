@@ -8,18 +8,18 @@
         <h3 class="font-bold text-foreground mb-1">导出数据</h3>
         <p class="text-sm text-muted-foreground mb-4">CSV 可用 Excel / WPS 打开；JSON 为完整结构化备份。</p>
         <div class="space-y-2">
-          <a :href="exportUrl('records.csv')" class="btn-ghost w-full !justify-start">
+          <button type="button" class="btn-ghost w-full !justify-start" :disabled="downloading" @click="download('records.csv')">
             📝 记工明细 CSV
-          </a>
-          <a :href="exportUrl('advances.csv')" class="btn-ghost w-full !justify-start">
+          </button>
+          <button type="button" class="btn-ghost w-full !justify-start" :disabled="downloading" @click="download('advances.csv')">
             💸 借支记录 CSV
-          </a>
-          <a :href="exportUrl('settlements.csv')" class="btn-ghost w-full !justify-start">
+          </button>
+          <button type="button" class="btn-ghost w-full !justify-start" :disabled="downloading" @click="download('settlements.csv')">
             ✅ 结算记录 CSV
-          </a>
-          <a :href="exportUrl('json')" class="btn-ghost w-full !justify-start">
+          </button>
+          <button type="button" class="btn-ghost w-full !justify-start" :disabled="downloading" @click="download('json')">
             🗂️ 全部数据 JSON 备份
-          </a>
+          </button>
         </div>
       </div>
 
@@ -30,7 +30,7 @@
           仅管理员可见：下载 SQLite 数据库快照（含全部数据），可用于整机迁移与恢复。
         </p>
         <template v-if="isAdmin">
-          <a :href="exportUrl('db')" class="btn-brand w-full">⬇️ 下载数据库备份（.db）</a>
+          <button type="button" class="btn-brand w-full" :disabled="downloading" @click="download('db')">⬇️ 下载数据库备份（.db）</button>
 
           <!-- 恢复进行中：遮住操作区，等重启后自动刷新 -->
           <div v-if="restoring" class="mt-4 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 text-sm leading-relaxed text-foreground">
@@ -83,7 +83,7 @@ import { computed, ref } from 'vue'
 import PageHeader from '../components/PageHeader.vue'
 import Toast from '../components/Toast.vue'
 import Modal from '../components/Modal.vue'
-import { exportUrl, importDB } from '../api/worklog'
+import { downloadExport, importDB } from '../api/worklog'
 import { useAuthStore } from '../stores/auth'
 
 const authStore = useAuthStore()
@@ -91,6 +91,7 @@ const isAdmin = computed(() => authStore.isAdmin)
 const toastMsg = ref('')
 const toastType = ref<'success' | 'error'>('success')
 
+const downloading = ref(false)
 const restoreFile = ref<File | null>(null)
 const showConfirm = ref(false)
 const uploading = ref(false)
@@ -99,6 +100,20 @@ const restoring = ref(false)
 function showToast(message: string, type: 'success' | 'error' = 'error') {
   toastMsg.value = message
   toastType.value = type
+}
+
+// 导出：走带认证的 blob 下载（直接点链接在直连端口会 401）
+async function download(path: string) {
+  if (downloading.value) return
+  downloading.value = true
+  try {
+    await downloadExport(path)
+    showToast('已开始下载', 'success')
+  } catch (e: any) {
+    showToast(e.response?.data?.message || '导出失败，请稍后重试')
+  } finally {
+    downloading.value = false
+  }
 }
 
 function onFileChange(e: Event) {

@@ -1,0 +1,52 @@
+name: 同步到 Gitee
+
+# 发版库以 GitHub 为唯一源：每次 push 到 main 或打 v* 标签后，
+# 自动把分支与标签镜像到 Gitee 同名仓库（TechFunWay/worklog）。
+# 只同步代码与标签；Release 附件仍按发版流程在两侧分别上传。
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: 推送分支与标签到 Gitee
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 配置 Gitee 凭据
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "缺少密钥 GITEE_TOKEN" >&2
+            exit 1
+          fi
+          git config --global url."https://wycto:${GITEE_TOKEN}@gitee.com/".insteadOf "https://gitee.com/"
+          git remote add gitee https://gitee.com/TechFunWay/worklog.git
+
+      - name: 取回远端全部分支与标签
+        # tag 触发的运行里 actions/checkout 只有标签（detached HEAD），本地没有
+        # refs/heads/main；分支触发的运行里 main 正被检出，又不能 fetch 回
+        # refs/heads/*（会 fatal: refusing to fetch into branch checked out）。
+        # 统一取到 remote-tracking 引用，配合下面按 remote-tracking 推送，prune 的
+        # 比对基准才正确——否则 tag 触发的运行会把远端 main 当成"待删分支"被 Gitee
+        # 拒绝（refusing to delete the current branch），分支触发的运行可能因本地
+        # 缺标签而把远端标签 prune 掉（发行版因此连带消失）。
+        run: |
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          git fetch origin '+refs/tags/*:refs/tags/*'
+
+      - name: 同步分支
+        run: git push --force --prune gitee 'refs/remotes/origin/*:refs/heads/*'
+
+      - name: 同步标签
+        run: git push --force --prune gitee 'refs/tags/*:refs/tags/*'

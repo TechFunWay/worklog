@@ -36,7 +36,7 @@
           v-if="open"
           ref="pop"
           role="listbox"
-          class="fixed z-[90] rounded-xl border border-border bg-surface/95 dark:bg-[#191a28]/95 backdrop-blur-xl shadow-2xl p-1.5 max-h-72 overflow-y-auto overscroll-contain"
+          class="fixed z-[90] rounded-xl border border-border bg-surface/95 dark:bg-[#191a28]/95 sm:backdrop-blur-xl shadow-2xl p-1.5 max-h-72 overflow-y-auto overscroll-contain"
           :style="popStyle"
           @pointerdown.stop
         >
