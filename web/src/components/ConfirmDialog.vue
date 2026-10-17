@@ -6,7 +6,7 @@
         <div class="relative bg-surface text-foreground shadow-xl w-full sm:max-w-sm sm:mx-4 rounded-t-2xl sm:rounded-2xl px-5 pt-4 pb-[calc(20px+env(safe-area-inset-bottom))] sm:p-6">
           <div class="sm:hidden mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" aria-hidden="true"></div>
           <h3 class="text-base sm:text-lg font-bold text-foreground mb-1.5 sm:mb-2">{{ title }}</h3>
-          <p class="text-sm text-muted-foreground mb-5 sm:mb-6">{{ message }}</p>
+          <p class="text-sm text-muted-foreground mb-5 sm:mb-6 whitespace-pre-line">{{ message }}</p>
           <div class="flex space-x-3">
             <button
               @click="handleCancel"

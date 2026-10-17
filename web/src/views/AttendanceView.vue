@@ -1,8 +1,13 @@
 <template>
   <div class="page-container animate-fade-in">
-    <PageHeader title="考勤表" :description="isWorker ? '我的出勤日历' : '按工人查看当月出勤日历'">
+    <PageHeader title="考勤表" :description="isWorker ? '我的出勤日历' : '按工人查看当月出勤日历，任意日期可点进记工'">
       <template #actions>
-        <SelectMenu v-if="!isWorker && workers.length > 0" v-model="workerId" :options="workers.map(w => ({ value: w.id as number, label: w.name }))" class="!py-2 text-sm" @change="load" />
+        <div class="flex flex-wrap items-center justify-end gap-2">
+          <SelectMenu v-if="!isWorker && workers.length > 0" v-model="workerId" :options="workers.map(w => ({ value: w.id as number, label: w.name }))" class="!py-2 text-sm" @change="load" />
+          <button type="button" class="btn-ghost !py-2 text-xs whitespace-nowrap" :disabled="exporting" @click="exportAttendance">
+            {{ exporting ? '导出中…' : '导出考勤表' }}
+          </button>
+        </div>
       </template>
     </PageHeader>
 
@@ -62,8 +67,10 @@
           </template>
         </div>
       </div>
-      <div class="mt-3 text-xs text-muted-foreground text-center">点日期可去记工（当天有记录打 ✓）</div>
+      <div class="mt-3 text-xs text-muted-foreground text-center">点任意日期可去记工（当天有记录打 ✓）</div>
     </div>
+
+    <Toast :message="toastMsg" :type="toastType" />
   </div>
 </template>
 
@@ -72,7 +79,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import PageHeader from '../components/PageHeader.vue'
 import SelectMenu from '../components/SelectMenu.vue'
-import { getAttendance, listWorkers, getMe, type AttendanceData, type Worker } from '../api/worklog'
+import Toast from '../components/Toast.vue'
+import { downloadExport, getAttendance, listWorkers, type AttendanceData, type Worker } from '../api/worklog'
 import { fmtYuan, todayStr } from '../utils/format'
 import { useWorklogStore } from '../stores/worklog'
 
@@ -87,6 +95,33 @@ const workerId = ref<number | ''>('')
 const workers = ref<Worker[]>([])
 const data = ref<AttendanceData | null>(null)
 const today = todayStr()
+const exporting = ref(false)
+const toastMsg = ref('')
+const toastType = ref<'success' | 'error'>('success')
+
+function toast(msg: string, type: 'success' | 'error' = 'success') {
+  toastMsg.value = msg
+  toastType.value = type
+  setTimeout(() => (toastMsg.value = ''), 3000)
+}
+
+// 导出当前月份的考勤表：选了工人就导该工人，未选则由后端导出全部在职工人
+async function exportAttendance() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    await downloadExport('attendance.csv', {
+      year: year.value,
+      month: month.value,
+      worker_id: workerId.value || undefined,
+    })
+    toast('考勤表已导出')
+  } catch (e: any) {
+    toast(e.response?.data?.message || '导出失败，请稍后重试', 'error')
+  } finally {
+    exporting.value = false
+  }
+}
 
 interface GridCell {
   date: string
@@ -126,9 +161,9 @@ const grid = computed<GridCell[]>(() => {
 
 function cellClass(cell: GridCell) {
   if (!cell.inMonth) return 'opacity-0 pointer-events-none border-transparent'
-  if (cell.rest) return 'border-teal-400/40 bg-teal-400/5'
+  if (cell.rest) return 'border-teal-400/40 bg-teal-400/5 cursor-pointer hover:bg-teal-400/10'
   if (cell.count > 0) return 'border-brand-400/40 bg-brand-500/5 cursor-pointer hover:bg-brand-500/10'
-  return 'border-border'
+  return 'border-border cursor-pointer hover:bg-muted'
 }
 
 function shiftMonth(delta: number) {
@@ -142,7 +177,9 @@ function shiftMonth(delta: number) {
 }
 
 function onCellClick(cell: GridCell) {
-  if (cell.date && cell.count > 0) router.push(`/admin/records?date=${cell.date}`)
+  // 任意当月日期都可点进记工：没记过的日期同样要能进入去补记，
+  // 不能只让已记过工的日期可点（粉丝反馈的“点日期记工无反应”）。
+  if (cell.date) router.push({ name: 'Records', query: { date: cell.date } })
 }
 
 async function load() {

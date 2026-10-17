@@ -55,9 +55,14 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	// 角色与班组
 	g.GET("/me", handleMe(db))
 	g.GET("/team", getTeam(db))
+	g.GET("/teams", listTeams(db))
 	g.POST("/teams", createTeam(db))
+	g.PUT("/teams/:id", updateTeam(db))
+	g.DELETE("/teams/:id", deleteTeam(db))
 	g.POST("/team/join", joinTeam(db))
+	g.POST("/team/members", addTeamMember(db))
 	g.PUT("/team/members/:id/role", updateMemberRole(db))
+	g.PUT("/team/members/:id/wage", updateMemberWage(db))
 	g.DELETE("/team/members/:id", removeMember(db))
 	g.DELETE("/team/leave", leaveTeam(db))
 	g.DELETE("/team", disbandTeam(db))
@@ -65,6 +70,7 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	// 导出（本人数据）
 	g.GET("/export/records.csv", exportRecordsCSV(db))
 	g.GET("/export/monthly.csv", exportMonthlyCSV(db))
+	g.GET("/export/attendance.csv", exportAttendanceCSV(db))
 	g.GET("/export/advances.csv", exportAdvancesCSV(db))
 	g.GET("/export/settlements.csv", exportSettlementsCSV(db))
 	g.GET("/export/json", exportJSON(db))

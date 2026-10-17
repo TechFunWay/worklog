@@ -20,7 +20,9 @@
         :placeholder="placeholder"
         :autofocus="autofocus || undefined"
         :class="[
-          'w-full py-3 rounded-xl bg-white/[0.04] border border-white/10 text-white placeholder-white/30 focus:bg-white/[0.07] focus:border-brand-400/70 focus:ring-4 focus:ring-brand-500/20 outline-none transition-all',
+          // 手机端 16px：小于 16px 的输入框聚焦时 iOS/WebView 会自动放大整页
+          // （表现为输入时闪跳），桌面端维持原字号。
+          'w-full py-3 rounded-xl bg-white/[0.04] border border-white/10 text-white text-base sm:text-sm placeholder-white/30 focus:bg-white/[0.07] focus:border-brand-400/70 focus:ring-4 focus:ring-brand-500/20 outline-none transition-all',
           $slots.icon ? 'pl-11' : 'pl-4',
           isPassword ? 'pr-11' : 'pr-4',
         ]"

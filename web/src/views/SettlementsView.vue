@@ -85,7 +85,7 @@
         <span class="self-center text-muted-foreground text-sm">至</span>
         <input type="date" v-model="sFilterEnd" class="input-field !w-auto !py-2 text-sm" @change="sPage = 1; loadSettled()" />
         <div class="flex-1"></div>
-        <a :href="exportUrl('settlements.csv')" class="btn-ghost !py-2 text-xs">导出 CSV</a>
+        <button type="button" class="btn-ghost !py-2 text-xs" :disabled="exporting" @click="exportSettlements">导出 CSV</button>
       </div>
 
       <div class="surface rounded-2xl overflow-hidden">
@@ -156,6 +156,7 @@
       </div>
     </Modal>
 
+    <ConfirmDialog v-model="confirmAskOpen" :title="confirmAskTitle" :message="confirmAskMessage" :confirm-text="confirmAskText" :confirm-type="confirmAskType" @confirm="confirmAskAction()" />
     <Toast :message="toastMsg" :type="toastType" />
   </div>
 </template>
@@ -166,10 +167,11 @@ import { RouterLink } from 'vue-router'
 import PageHeader from '../components/PageHeader.vue'
 import SelectMenu from '../components/SelectMenu.vue'
 import Modal from '../components/Modal.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
 import {
   unsettledList, unsettledProjects, createSettlement, batchSettlement, listSettlements, listWorkers,
-  exportUrl, type workerUnsettledRow, type Settlement, type Worker,
+  downloadExport, type workerUnsettledRow, type Settlement, type Worker,
 } from '../api/worklog'
 import { fmtMoney } from '../utils/format'
 import { useWorklogStore } from '../stores/worklog'
@@ -177,6 +179,22 @@ import { useWorklogStore } from '../stores/worklog'
 const store = useWorklogStore()
 const isBoss = computed(() => store.isBoss)
 const canManage = computed(() => store.canManage)
+
+// 通用确认弹窗（替代原生 confirm）
+const confirmAskOpen = ref(false)
+const confirmAskTitle = ref('')
+const confirmAskMessage = ref('')
+const confirmAskText = ref('确认')
+const confirmAskType = ref<'primary' | 'danger'>('primary')
+const confirmAskAction = ref<() => void | Promise<void>>(() => {})
+function askConfirm(title: string, message: string, action: () => void | Promise<void>, opts: { text?: string; type?: 'primary' | 'danger' } = {}) {
+  confirmAskTitle.value = title
+  confirmAskMessage.value = message
+  confirmAskText.value = opts.text ?? '确认'
+  confirmAskType.value = opts.type ?? 'primary'
+  confirmAskAction.value = action
+  confirmAskOpen.value = true
+}
 
 const tab = ref<'unsettled' | 'projects' | 'settled'>('unsettled')
 const unsettled = ref<workerUnsettledRow[]>([])
@@ -207,19 +225,20 @@ async function settleProject(p: { project_id: number; project_name: string; reco
   const now = new Date()
   const start = new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10)
   const end = now.toISOString().slice(0, 10)
-  if (!confirm(`按项目结算「${p.project_name}」？\n只结算该工地的记工（借支不抵扣），共 ${p.record_count} 笔。`)) return
-  saving.value = true
-  try {
-    const res = await batchSettlement({ start, end, project_id: p.project_id, note: `${p.project_name} 结算` })
-    if (res.data?.code === 0) {
-      toast('项目结算完成')
-      await Promise.all([loadUnsettled(), loadSettled(), loadProjRows()])
-    } else toast(res.data?.message || '结算失败', 'error')
-  } catch (e: any) {
-    toast(e.response?.data?.message || '结算失败', 'error')
-  } finally {
-    saving.value = false
-  }
+  askConfirm('按项目结算', `按项目结算「${p.project_name}」？\n只结算该工地的记工（借支不抵扣），共 ${p.record_count} 笔。`, async () => {
+    saving.value = true
+    try {
+      const res = await batchSettlement({ start, end, project_id: p.project_id, note: `${p.project_name} 结算` })
+      if (res.data?.code === 0) {
+        toast('项目结算完成')
+        await Promise.all([loadUnsettled(), loadSettled(), loadProjRows()])
+      } else toast(res.data?.message || '结算失败', 'error')
+    } catch (e: any) {
+      toast(e.response?.data?.message || '结算失败', 'error')
+    } finally {
+      saving.value = false
+    }
+  }, { text: '结算' })
 }
 
 const confirmOpen = ref(false)
@@ -229,6 +248,7 @@ const confirmNote = ref('')
 const batchStart = ref('')
 const batchEnd = ref('')
 const saving = ref(false)
+const exporting = ref(false)
 const toastMsg = ref('')
 const toastType = ref<'success' | 'error'>('success')
 
@@ -258,6 +278,19 @@ function openConfirm(row: workerUnsettledRow) {
   confirmSummary.value = row
   confirmNote.value = ''
   confirmOpen.value = true
+}
+
+async function exportSettlements() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    await downloadExport('settlements.csv')
+    toast('已开始下载')
+  } catch (e: any) {
+    toast(e.response?.data?.message || '导出失败，请稍后重试', 'error')
+  } finally {
+    exporting.value = false
+  }
 }
 
 function toast(msg: string, type: 'success' | 'error' = 'success') {

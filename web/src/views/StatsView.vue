@@ -19,7 +19,7 @@
         <SelectMenu v-model.number="month" :options="monthOptions" class="!py-2 text-sm" @change="loadMonthly" />
         <SelectMenu v-model="mProject" :options="projectFilterOptions" class="!py-2 text-sm" @change="loadMonthly" />
         <div class="flex-1"></div>
-        <a :href="exportUrl('monthly.csv', { year, month })" class="btn-ghost !py-2 text-xs">导出月报 CSV</a>
+        <button type="button" class="btn-ghost !py-2 text-xs" :disabled="exporting" @click="exportCsv('monthly.csv', { year, month })">导出月报 CSV</button>
       </div>
 
       <div class="surface rounded-2xl overflow-hidden">
@@ -87,7 +87,7 @@
         <span class="self-center text-muted-foreground text-sm">至</span>
         <input type="date" v-model="rEnd" class="input-field !w-auto !py-2 text-sm" @change="loadRange" />
         <div class="flex-1"></div>
-        <a :href="exportUrl('records.csv', { worker_id: rWorker, start: rStart, end: rEnd })" class="btn-ghost !py-2 text-xs">导出明细 CSV</a>
+        <button type="button" class="btn-ghost !py-2 text-xs" :disabled="exporting" @click="exportCsv('records.csv', { worker_id: rWorker || undefined, start: rStart, end: rEnd })">导出明细 CSV</button>
       </div>
 
       <div v-if="rangeSummary" class="grid grid-cols-3 gap-3">
@@ -131,6 +131,8 @@
         </div>
       </div>
     </template>
+
+    <Toast :message="toastMsg" :type="toastType" />
   </div>
 </template>
 
@@ -138,8 +140,31 @@
 import { ref, computed, onMounted } from 'vue'
 import PageHeader from '../components/PageHeader.vue'
 import SelectMenu from '../components/SelectMenu.vue'
-import { statsMonthly, statsRange, listWorkers, listProjects, exportUrl, type MonthlyStatRow, type WorkRecord, type Worker, type Project } from '../api/worklog'
+import Toast from '../components/Toast.vue'
+import { statsMonthly, statsRange, listWorkers, listProjects, downloadExport, type MonthlyStatRow, type WorkRecord, type Worker, type Project } from '../api/worklog'
 import { fmtMoney, TYPE_LABELS, todayStr } from '../utils/format'
+
+// 导出：走带认证的 blob 下载（<a href> 在直连端口会 401）
+const exporting = ref(false)
+const toastMsg = ref('')
+const toastType = ref<'success' | 'error'>('success')
+function toast(msg: string, type: 'success' | 'error' = 'success') {
+  toastMsg.value = msg
+  toastType.value = type
+  setTimeout(() => (toastMsg.value = ''), 3000)
+}
+async function exportCsv(path: string, params: Record<string, unknown>) {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    await downloadExport(path, params)
+    toast('已开始下载')
+  } catch (e: any) {
+    toast(e.response?.data?.message || '导出失败，请稍后重试', 'error')
+  } finally {
+    exporting.value = false
+  }
+}
 
 const tab = ref<'monthly' | 'range'>('monthly')
 const now = new Date()

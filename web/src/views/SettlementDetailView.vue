@@ -115,6 +115,7 @@
 
     <div v-else class="surface rounded-2xl p-10 text-center text-muted-foreground">加载中…</div>
 
+    <ConfirmDialog v-model="confirmOpen" :title="confirmTitle" :message="confirmMessage" :confirm-text="confirmText" confirm-type="danger" @confirm="confirmAction()" />
     <Toast :message="toastMsg" :type="toastType" />
   </div>
 </template>
@@ -123,6 +124,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import PageHeader from '../components/PageHeader.vue'
+import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
 import { getSettlement, revertSettlement, updateSettlementNote, type Settlement } from '../api/worklog'
 import { fmtMoney, fmtYuan } from '../utils/format'
@@ -140,6 +142,20 @@ const toastMsg = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const slipRef = ref<HTMLElement | null>(null)
 const siteTitle = ref('工记')
+
+// 通用确认弹窗（替代原生 confirm）
+const confirmOpen = ref(false)
+const confirmTitle = ref('')
+const confirmMessage = ref('')
+const confirmText = ref('确认')
+const confirmAction = ref<() => void | Promise<void>>(() => {})
+function askConfirm(title: string, message: string, action: () => void | Promise<void>, text = '确认') {
+  confirmTitle.value = title
+  confirmMessage.value = message
+  confirmText.value = text
+  confirmAction.value = action
+  confirmOpen.value = true
+}
 
 const serial = computed(() => String(route.params.id).padStart(6, '0'))
 
@@ -202,16 +218,17 @@ function copyText() {
   )
 }
 
-async function revert() {
+function revert() {
   if (!s.value) return
-  if (!confirm('撤销后该结算单删除，相关记工/借支恢复为未结算，可以重新调整后再结算。确定撤销？')) return
-  try {
-    await revertSettlement(s.value.id)
-    toast('已撤销结算')
-    router.push('/admin/settlements')
-  } catch (e: any) {
-    toast(e.response?.data?.message || '撤销失败', 'error')
-  }
+  askConfirm('撤销结算', '撤销后该结算单删除，相关记工/借支恢复为未结算，可以重新调整后再结算。确定撤销？', async () => {
+    try {
+      await revertSettlement(s.value!.id)
+      toast('已撤销结算')
+      router.push('/admin/settlements')
+    } catch (e: any) {
+      toast(e.response?.data?.message || '撤销失败', 'error')
+    }
+  }, '撤销')
 }
 
 async function saveNote() {

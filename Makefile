@@ -18,7 +18,7 @@ help:
 	@echo "  build-backend   仅构建后端"
 	@echo "  build-linux     构建 linux/amd64 版本"
 	@echo "  build-docker    构建 Docker 镜像"
-	@echo "  build-docker-multi 构建 docker 多平台合并镜像（OCI 归档）"
+	@echo "  build-docker-multi 构建 docker 多平台合并镜像（OCI 归档，PUSH=1 推 Docker Hub）"
 	@echo "  build-all       构建所有平台"
 	@echo "  fnpack          打飞牛 fnOS 安装包"
 	@echo "  clean           清理构建产物"

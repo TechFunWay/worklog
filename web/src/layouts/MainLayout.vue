@@ -106,7 +106,8 @@
 
     <!-- Mobile overlay -->
     <transition enter-active-class="transition-opacity duration-200" enter-from-class="opacity-0" leave-active-class="transition-opacity duration-200" leave-to-class="opacity-0">
-      <div v-if="sidebarOpen" class="fixed inset-0 z-30 bg-foreground/40 backdrop-blur-sm lg:hidden" @click="sidebarOpen = false"></div>
+      <!-- 手机端不用 backdrop-blur-sm：全屏遮罩每帧采样底层是掉帧大户，改纯色遮罩即可 -->
+      <div v-if="sidebarOpen" class="fixed inset-0 z-30 bg-foreground/55 lg:bg-foreground/40 lg:backdrop-blur-sm" @click="sidebarOpen = false"></div>
     </transition>
 
     <!-- Main column -->
@@ -174,7 +175,10 @@
         </div>
 
         <RouterView v-slot="{ Component }">
-          <transition mode="out-in" enter-active-class="transition-all duration-300 ease-out" enter-from-class="opacity-0 translate-y-2" leave-active-class="transition-all duration-150" leave-to-class="opacity-0">
+          <!-- 手机端体验：短淡入即可。此前 transition-all + 300ms 会同时动
+               opacity/transform 等不可合成属性，键盘弹出或列表滚动时明显掉帧；
+               合成属性动画交给 GPU，帧时间稳定。 -->
+          <transition mode="out-in" enter-active-class="transition-[opacity,transform] duration-150 ease-out" enter-from-class="opacity-0 translate-y-1.5" leave-active-class="transition-opacity duration-75" leave-to-class="opacity-0">
             <component :is="Component" />
           </transition>
         </RouterView>
@@ -259,7 +263,10 @@ const menuRef = ref<HTMLElement | null>(null)
 const versionInfo = ref('')
 
 onMounted(async () => {
-  await worklogStore.load()
+  // 强制刷新角色上下文：退出后换另一个账号登录时组件会重新挂载，但 Pinia
+  // store 还在内存里；沿用旧用户的 role 会让新用户看到错误导航（新注册账号
+  // “不能正常使用”的表现之一）。
+  await worklogStore.load(true)
   try {
     const res = await getVersion()
     if (res.data?.code === 0) {
@@ -388,6 +395,7 @@ async function handleLogout() {
   // 先让服务端落「主动登出」抑制标记，再清本地：网关域上只清前端的话，
   // 下一个请求会被网关注入身份重新认回登录态（退不出去）。
   await authStore.endSession()
+  worklogStore.reset()
   router.push('/login')
 }
 
@@ -422,10 +430,16 @@ onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 </script>
 
 <style scoped>
+/* 手机端毛玻璃是掉帧大户：底栏固定在屏幕上，滚动时每帧都要对下层重新采样，
+   键盘弹出时又跟着视口重排。手机端改用近不透明底色，观感几乎无差。 */
 .mobile-bottom-nav {
   background: rgb(var(--color-surface) / 0.88);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+}
+@media (min-width: 1024px) {
+  .mobile-bottom-nav {
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+  }
 }
 .nav-link {
   @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200;
@@ -454,28 +468,29 @@ onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 .glow {
   position: absolute;
   border-radius: 9999px;
-  filter: blur(110px);
+  /* 用径向渐变画柔光，不用 filter: blur —— 大面积高斯模糊在手机 WebView 上渲染贵、
+     重绘更贵（键盘弹出、滚动都会触发重绘，表现为输入时卡顿闪屏）。 */
 }
 .glow-1 {
   width: 40rem;
   height: 40rem;
   top: -14rem;
   left: -10rem;
-  background: rgba(234, 88, 12, 0.14);
+  background: radial-gradient(circle, rgba(234, 88, 12, 0.18) 0%, rgba(234, 88, 12, 0) 65%);
 }
 .glow-2 {
   width: 36rem;
   height: 36rem;
   top: -8rem;
   right: -12rem;
-  background: rgba(20, 184, 166, 0.12);
+  background: radial-gradient(circle, rgba(20, 184, 166, 0.16) 0%, rgba(20, 184, 166, 0) 65%);
 }
 .glow-3 {
   width: 34rem;
   height: 34rem;
   bottom: -16rem;
   left: 30%;
-  background: rgba(251, 191, 36, 0.12);
+  background: radial-gradient(circle, rgba(251, 191, 36, 0.15) 0%, rgba(251, 191, 36, 0) 65%);
 }
 .app-grid {
   position: absolute;
@@ -487,7 +502,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
   -webkit-mask: radial-gradient(circle at 50% 0%, #000 0%, transparent 70%);
   mask: radial-gradient(circle at 50% 0%, #000 0%, transparent 70%);
 }
-.dark .glow-1 { background: rgba(234, 88, 12, 0.24); }
-.dark .glow-2 { background: rgba(20, 184, 166, 0.2); }
-.dark .glow-3 { background: rgba(251, 191, 36, 0.18); }
+.dark .glow-1 { background: radial-gradient(circle, rgba(234, 88, 12, 0.3) 0%, rgba(234, 88, 12, 0) 65%); }
+.dark .glow-2 { background: radial-gradient(circle, rgba(20, 184, 166, 0.26) 0%, rgba(20, 184, 166, 0) 65%); }
+.dark .glow-3 { background: radial-gradient(circle, rgba(251, 191, 36, 0.24) 0%, rgba(251, 191, 36, 0) 65%); }
 </style>

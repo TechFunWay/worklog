@@ -18,6 +18,15 @@ import (
 
 type fnOSGatewayContextKey struct{}
 
+// authenticate 认人成功时通过 c.Set("auth_via", …) 记下这次靠的是什么凭证，
+// 供需要区分「会话归谁」的下游使用（如 /auth/check 的 session_source：只有
+// AuthViaGateway 才意味着会话跟随 NAS，其余都是应用自己的会话）。
+const (
+	AuthViaAPIKey  = "api_key"
+	AuthViaToken   = "token"
+	AuthViaGateway = "gateway"
+)
+
 // MarkFnOSGateway marks a request connection that arrived through the fnOS
 // unified Unix-socket gateway. TCP clients can send the same header names, so
 // headers are only trusted when this marker was applied by server.Start's ConnContext.
@@ -124,6 +133,7 @@ func authenticate(c *gin.Context, jwtSecret string, db *gorm.DB) (database.User,
 	if apiKey := c.GetHeader("X-API-Key"); apiKey != "" {
 		var user database.User
 		if err := db.Where("api_key = ? AND status = ?", apiKey, 1).First(&user).Error; err == nil {
+			c.Set("auth_via", AuthViaAPIKey)
 			return user, true
 		}
 	}
@@ -132,12 +142,16 @@ func authenticate(c *gin.Context, jwtSecret string, db *gorm.DB) (database.User,
 	if authHeader := c.GetHeader("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
 		tokenString = strings.TrimPrefix(authHeader, "Bearer ")
 	} else if cookie, err := c.Cookie("token"); err == nil {
+		// 网关域上应用自己的 Authorization 送不进应用，账密登录换来的 JWT 改由
+		// HttpOnly cookie（Path=网关前缀）携带，见 user.handleLogin。cookie 在
+		// 这里与 Authorization 同等对待：有且有效就优先于网关隐式身份。
 		tokenString = cookie
 	}
 	if tokenString != "" {
 		if userID, _, _, authVersion, err := auth.ParseToken(tokenString, jwtSecret); err == nil {
 			var user database.User
 			if err := db.Where("id = ? AND status = ?", userID, 1).First(&user).Error; err == nil && user.AuthVersion == authVersion {
+				c.Set("auth_via", AuthViaToken)
 				return user, true
 			}
 		}
@@ -153,6 +167,7 @@ func authenticate(c *gin.Context, jwtSecret string, db *gorm.DB) (database.User,
 	// 但隐式登录态只在用户没有主动登出时成立：应用自己的登录/退出归应用管，
 	// 飞牛授权只是身份来源（见 user_sessions 表与 GatewayIdentityUser）。
 	if user, ok := GatewayIdentityUser(c.Request, db); ok {
+		c.Set("auth_via", AuthViaGateway)
 		return user, true
 	}
 

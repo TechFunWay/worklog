@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -77,6 +79,159 @@ func exportMonthlyCSV(db *gorm.DB) gin.HandlerFunc {
 			})
 		}
 		utils.WriteCSV(c, utils.ExportFilename(fmt.Sprintf("工资月报-%d-%02d", year, month), "csv"), rows)
+	}
+}
+
+// exportAttendanceCSV 导出某月「考勤表」：按工人逐日列出点工/点时/计件/休息
+// 与当天工资，每人末尾带一行合计。不传 worker_id 时导出全部在职工人（含当月
+// 有记录的已归档工人），传 worker_id 时只导出该工人；员工角色强制只导出自己。
+func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := currentUID(c)
+		ac := loadAccess(db, uid)
+		dsUID := ac.scopeUser()
+		now := time.Now()
+		year := atoiDefault(c.Query("year"), now.Year())
+		month := atoiDefault(c.Query("month"), int(now.Month()))
+		if month < 1 || month > 12 {
+			response.ErrorBadRequest(c, "月份不正确")
+			return
+		}
+		start, end := monthRange(year, month)
+
+		workerID := utils.Atoi(c.Query("worker_id"), 0)
+		if sw, ok := ac.workerScope(); ok {
+			workerID = int(sw)
+		}
+
+		var workers []Worker
+		qw := db.Where("user_id = ?", dsUID)
+		if workerID > 0 {
+			qw = qw.Where("id = ?", workerID)
+		} else {
+			qw = qw.Where("status = ?", "active")
+		}
+		if err := qw.Order("name ASC, id ASC").Find(&workers).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+		if workerID > 0 && len(workers) == 0 {
+			response.ErrorBadRequest(c, "工人不存在")
+			return
+		}
+
+		var records []WorkRecord
+		q := db.Where("user_id = ? AND date BETWEEN ? AND ?", dsUID, start, end)
+		if workerID > 0 {
+			q = q.Where("worker_id = ?", workerID)
+		}
+		if err := q.Order("worker_id ASC, date ASC, id ASC").Find(&records).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+
+		// 当月有记录、但已归档或不在职工人列表里的工人也要出现在考勤表里，
+		// 否则「上月记了工、这月归档」的人会整月从考勤表消失。
+		known := make(map[uint]bool, len(workers))
+		for _, w := range workers {
+			known[w.ID] = true
+		}
+		var extraIDs []uint
+		for _, r := range records {
+			if !known[r.WorkerID] {
+				known[r.WorkerID] = true
+				extraIDs = append(extraIDs, r.WorkerID)
+			}
+		}
+		if len(extraIDs) > 0 {
+			var extra []Worker
+			if err := db.Where("user_id = ? AND id IN ?", dsUID, extraIDs).Find(&extra).Error; err != nil {
+				response.ErrorInternal(c, "导出失败")
+				return
+			}
+			workers = append(workers, extra...)
+			sort.SliceStable(workers, func(i, j int) bool {
+				if workers[i].Name == workers[j].Name {
+					return workers[i].ID < workers[j].ID
+				}
+				return workers[i].Name < workers[j].Name
+			})
+		}
+
+		// 工人 + 日期 聚合
+		type dayAgg struct {
+			days, hours, pieces float64
+			rest                bool
+			amountCents         int64
+			notes               []string
+		}
+		agg := make(map[uint]map[string]*dayAgg, len(workers))
+		for _, r := range records {
+			byDate := agg[r.WorkerID]
+			if byDate == nil {
+				byDate = map[string]*dayAgg{}
+				agg[r.WorkerID] = byDate
+			}
+			cell := byDate[r.Date]
+			if cell == nil {
+				cell = &dayAgg{}
+				byDate[r.Date] = cell
+			}
+			cell.amountCents += r.AmountCents
+			if r.Type == TypeRest {
+				cell.rest = true
+			} else {
+				qty := parseFloat(r.Quantity)
+				switch r.Type {
+				case TypeDay:
+					cell.days += qty
+				case TypeHour:
+					cell.hours += qty
+				case TypePiece:
+					cell.pieces += qty
+				}
+			}
+			if r.Note != "" {
+				cell.notes = append(cell.notes, r.Note)
+			}
+		}
+
+		rows := [][]string{{"工人", "日期", "点工(天)", "点时(小时)", "计件(数量)", "休息", "金额(元)", "备注"}}
+		for _, w := range workers {
+			byDate := agg[w.ID]
+			dates := make([]string, 0, len(byDate))
+			for d := range byDate {
+				dates = append(dates, d)
+			}
+			sort.Strings(dates)
+
+			var totalDays, totalHours, totalPieces float64
+			var totalRest int
+			var totalAmount int64
+			for _, d := range dates {
+				cell := byDate[d]
+				restMark := ""
+				if cell.rest {
+					restMark = "休"
+					totalRest++
+				}
+				rows = append(rows, []string{
+					w.Name, d, trimFloat(cell.days), trimFloat(cell.hours), trimFloat(cell.pieces),
+					restMark, centsToYuanString(cell.amountCents), strings.Join(cell.notes, "；"),
+				})
+				totalDays += cell.days
+				totalHours += cell.hours
+				totalPieces += cell.pieces
+				totalAmount += cell.amountCents
+			}
+			// 每人一行合计，没有记录的人也列出 0，考勤表才能覆盖全部在职工人。
+			rows = append(rows, []string{
+				w.Name, "合计", trimFloat(totalDays), trimFloat(totalHours),
+				trimFloat(totalPieces), fmt.Sprintf("%d", totalRest),
+				centsToYuanString(totalAmount), "",
+			})
+		}
+		utils.WriteCSV(c, utils.ExportFilename(fmt.Sprintf("考勤表-%d-%02d", year, month), "csv"), rows)
 	}
 }
 

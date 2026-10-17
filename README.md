@@ -5,6 +5,61 @@
 
 在飞牛 fnOS 上可通过 NAS 账号一键登录；也支持 Docker 与裸二进制部署。
 
+## 下载与安装
+
+| 渠道 | 获取方式 |
+|---|---|
+| GitHub Releases | <https://github.com/TechFunWay/worklog/releases> —— 各平台压缩包、飞牛 `fpk` 安装包与 `docker-compose.yml` |
+| Gitee 发行版 | <https://gitee.com/TechFunWay/worklog/releases> —— 国内镜像，产物与 GitHub 一致 |
+| Docker 镜像 | `docker pull techfunways/worklog:latest`（amd64 / arm64 多平台） |
+| 飞牛 fnOS | 在飞牛应用中心手动安装 Releases 里的 `.fpk` 安装包（amd64 / arm64） |
+| 官网介绍页 | <https://techfunway.wycto.cn/fnapp/worklog> |
+
+> 默认端口 `8909`；数据默认是挂载目录下的 SQLite 单文件，备份即拷贝，恢复支持上传本地备份文件。
+
+## 界面预览
+
+> 以下截图为 v0.3.0 实拍，数据为演示用示例数据。
+
+**工作台**：本月应付、待结算与借支提醒一目了然
+
+![工作台](images/screenshots/worklog-dashboard.png)
+
+**记工**：点工 / 点时 / 计件三种录入，计件项目自动带出默认单价
+
+![记工](images/screenshots/worklog-record.png)
+
+**考勤表**：整月出勤日历与当月工钱汇总，任意日期可点进记工，支持导出考勤表
+
+![考勤表](images/screenshots/worklog-attendance.png)
+
+**我的班组**：可建多个班组并随时切换，给每个成员设日薪/时薪
+
+![我的班组](images/screenshots/worklog-team.png)
+
+**结算**：未结算汇总按人核对应发、借支与净应付
+
+![结算](images/screenshots/worklog-settlement.png)
+
+**统计**：月度统计与自定义时间段查询
+
+![统计](images/screenshots/worklog-stats.png)
+
+**深色主题**：工地夜间也能看清记工明细
+
+![深色主题](images/screenshots/worklog-dashboard-dark.png)
+
+**手机端**（390 × 844）：记工、考勤与班组
+
+<p>
+  <img src="images/screenshots/worklog-mobile-record.png" width="300" alt="手机端记工" />
+  <img src="images/screenshots/worklog-mobile-attendance.png" width="300" alt="手机端考勤" />
+  <img src="images/screenshots/worklog-mobile-team.png" width="300" alt="手机端班组" />
+</p>
+
+其余截图（手机端工作台、工人列表、借支、数据备份）见
+[images/screenshots/](images/screenshots/)，同一套图也随发行目录分发（`release/<版本>/screenshots-<版本>.zip`）。
+
 ## 功能
 
 ### 记工（核心）
@@ -14,10 +69,12 @@
 - 日历式记工页，移动端优先，30 秒完成一笔录入
 - 工地 / 项目维度（选填），统计可按工地筛选
 
-### 角色与班组（v0.2）
-- 老板 / 组长 / 员工三种角色：老板建班组，凭邀请码加入
+### 角色与班组（v0.2 起，v0.3 增强）
+- 老板 / 组长 / 员工三种角色：老板建班组，凭邀请码加入；管理员也可在用户管理里把已有账号直接加入班组
+- **可创建多个班组**并随时切换，每个班组独立维护邀请码、成员与备注
+- **成员单价**：给每个成员设日薪/时薪，记工时自动带出
 - 组长可帮工人记工、记借支；**员工只能给自己记工**，可查看自己的考勤、工资、结算单
-- 考勤表：月历展示每个工人的出勤（1个工 / 0.5个工 / 小时 / 件 / 休），月度汇总工钱
+- 考勤表：月历展示每个工人的出勤（1个工 / 0.5个工 / 小时 / 件 / 休），月度汇总工钱；任意日期可点进记工，支持导出考勤表 CSV
 - 休息标记、多天连记、确认并再记一笔
 - 未结工资按人结算 / 按项目（工地）结算
 

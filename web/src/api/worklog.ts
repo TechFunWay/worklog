@@ -163,15 +163,43 @@ export const statsMonthly = (params: Record<string, unknown>) => request.get('/a
 export const statsRange = (params: Record<string, unknown>) => request.get('/api/worklog/stats/range', { params })
 
 // ---- 导出 ----
-export const exportUrl = (path: string, params?: Record<string, unknown>) => {
-  const qs = params
-    ? '?' +
-      Object.entries(params)
-        .filter(([, v]) => v !== '' && v !== undefined && v !== null)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`)
-        .join('&')
-    : ''
-  return import.meta.env.BASE_URL.replace(/\/$/, '') + `/api/worklog/export/${path}${qs}`
+// 导出接口需要认证：直连端口只有 Authorization（没有会话 Cookie），而浏览器
+// 直接点 <a href> 不会带 Authorization，会 401。统一用 axios 取 blob 再触发
+// 下载，直连端口与飞牛网关域（Cookie 会话）都能用。
+function filenameFromDisposition(header: string, fallback: string): string {
+  if (header) {
+    const encoded = /filename\*=UTF-8''([^;]+)/i.exec(header)
+    if (encoded) {
+      try {
+        return decodeURIComponent(encoded[1].trim())
+      } catch {
+        return encoded[1].trim()
+      }
+    }
+    const plain = /filename="?([^";]+)"?/i.exec(header)
+    if (plain) return plain[1].trim()
+  }
+  return fallback
+}
+
+export async function downloadExport(path: string, params?: Record<string, unknown>): Promise<void> {
+  const res = await request.get(`/api/worklog/export/${path}`, { params, responseType: 'blob' })
+  const blob = res.data instanceof Blob ? res.data : new Blob([res.data])
+  const filename = filenameFromDisposition(
+    String(res.headers?.['content-disposition'] || ''),
+    path.split('/').pop() || 'export',
+  )
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
 }
 
 // ---- 角色与班组 ----
@@ -188,18 +216,68 @@ export interface MeInfo {
 
 export interface TeamMemberInfo {
   id: number
+  team_id?: number
   user_id: number
   role: 'boss' | 'leader' | 'worker'
   worker_id?: number | null
   username: string
   worker_name?: string
+  daily_wage_cents?: number
+  hourly_wage_cents?: number
+}
+
+// 班组列表卡片（GET /worklog/teams）
+export interface TeamCard {
+  id: number
+  name: string
+  note?: string
+  invite_code?: string
+  created_at?: string
+  is_owner: boolean
+  my_role: 'boss' | 'leader' | 'worker'
+  member_count: number
+}
+
+export interface TeamInfo {
+  id: number
+  name: string
+  note?: string
+  invite_code?: string
+  created_at?: string
+}
+
+export interface TeamDetail {
+  team: TeamInfo
+  members: TeamMemberInfo[]
+  my_role: 'boss' | 'leader' | 'worker'
+  is_owner: boolean
+}
+
+export interface TeamListResult {
+  teams: TeamCard[]
+  joined: TeamCard | null
 }
 
 export const getMe = () => request.get('/api/worklog/me')
 export const getTeam = () => request.get('/api/worklog/team')
+export const getTeamInfo = (teamId?: number) =>
+  request.get('/api/worklog/team', { params: teamId ? { team_id: teamId } : undefined })
+export const listTeams = () => request.get('/api/worklog/teams')
 export const createTeam = (data: { name: string; note?: string }) => request.post('/api/worklog/teams', data)
+export const updateTeam = (id: number, data: { name?: string; note?: string }) => request.put(`/api/worklog/teams/${id}`, data)
+export const deleteTeam = (id: number) => request.delete(`/api/worklog/teams/${id}`)
 export const joinTeam = (data: { invite_code: string; worker_name: string }) => request.post('/api/worklog/team/join', data)
+export const addTeamMember = (data: {
+  team_id: number
+  user_id: number
+  role: 'leader' | 'worker'
+  worker_name?: string
+  daily_wage_cents?: number
+  hourly_wage_cents?: number
+}) => request.post('/api/worklog/team/members', data)
 export const updateMemberRole = (id: number, role: 'leader' | 'worker') => request.put(`/api/worklog/team/members/${id}/role`, { role })
+export const updateMemberWage = (id: number, data: { daily_wage_cents: number; hourly_wage_cents: number }) =>
+  request.put(`/api/worklog/team/members/${id}/wage`, data)
 export const removeMember = (id: number) => request.delete(`/api/worklog/team/members/${id}`)
 export const leaveTeam = () => request.delete('/api/worklog/team/leave')
 export const disbandTeam = () => request.delete('/api/worklog/team')
