@@ -45,7 +45,7 @@ func exportRecordsCSV(db *gorm.DB) gin.HandlerFunc {
 				r.ProjectName, pieceLabel(r), status, r.Note,
 			})
 		}
-		utils.WriteCSV(c, utils.ExportFilename("记工明细", "csv"), rows)
+		writeCSV(c, utils.ExportFilename("记工明细", "csv"), rows)
 	}
 }
 
@@ -78,7 +78,7 @@ func exportMonthlyCSV(db *gorm.DB) gin.HandlerFunc {
 				r.ProjectName, pieceLabel(r), r.Note,
 			})
 		}
-		utils.WriteCSV(c, utils.ExportFilename(fmt.Sprintf("工资月报-%d-%02d", year, month), "csv"), rows)
+		writeCSV(c, utils.ExportFilename(fmt.Sprintf("工资月报-%d-%02d", year, month), "csv"), rows)
 	}
 }
 
@@ -101,6 +101,12 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 
 		workerID := utils.Atoi(c.Query("worker_id"), 0)
 		if sw, ok := ac.workerScope(); ok {
+			// 员工只能导出自己；成员行没绑工人档案时直接拒绝，
+			// 不能退回下面的 else 分支去导出全部在职工人。
+			if ac.workerUnbound() {
+				forbidden(c)
+				return
+			}
 			workerID = int(sw)
 		}
 
@@ -231,7 +237,7 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 				centsToYuanString(totalAmount), "",
 			})
 		}
-		utils.WriteCSV(c, utils.ExportFilename(fmt.Sprintf("考勤表-%d-%02d", year, month), "csv"), rows)
+		writeCSV(c, utils.ExportFilename(fmt.Sprintf("考勤表-%d-%02d", year, month), "csv"), rows)
 	}
 }
 
@@ -252,7 +258,7 @@ func exportAdvancesCSV(db *gorm.DB) gin.HandlerFunc {
 			}
 			rows = append(rows, []string{a.Date, a.WorkerName, centsToYuanString(a.AmountCents), methodLabels[a.Method], status, a.Note})
 		}
-		utils.WriteCSV(c, utils.ExportFilename("借支记录", "csv"), rows)
+		writeCSV(c, utils.ExportFilename("借支记录", "csv"), rows)
 	}
 }
 
@@ -273,7 +279,7 @@ func exportSettlementsCSV(db *gorm.DB) gin.HandlerFunc {
 				s.SettledAt.Format("2006-01-02 15:04"), s.Note,
 			})
 		}
-		utils.WriteCSV(c, utils.ExportFilename("结算记录", "csv"), rows)
+		writeCSV(c, utils.ExportFilename("结算记录", "csv"), rows)
 	}
 }
 

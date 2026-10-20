@@ -50,6 +50,7 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	g.GET("/stats/dashboard", statsDashboard(db))
 	g.GET("/stats/monthly", statsMonthly(db))
 	g.GET("/stats/range", statsRange(db))
+	g.GET("/stats/project", statsByProject(db))
 	g.GET("/attendance", statsAttendance(db))
 
 	// 角色与班组

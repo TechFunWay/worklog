@@ -3,10 +3,13 @@
     <PageHeader title="统计" description="按月汇总 / 按人员与时间段查询" />
 
     <!-- Tab -->
-    <div class="surface rounded-2xl p-1.5 grid grid-cols-2 gap-1.5">
+    <div class="surface rounded-2xl p-1.5 grid grid-cols-3 gap-1.5">
       <button class="py-2.5 rounded-xl text-sm font-semibold transition-all"
               :class="tab === 'monthly' ? 'bg-brand-gradient text-white shadow-glow' : 'text-muted-foreground'"
               @click="tab = 'monthly'">月度统计</button>
+      <button class="py-2.5 rounded-xl text-sm font-semibold transition-all"
+              :class="tab === 'project' ? 'bg-brand-gradient text-white shadow-glow' : 'text-muted-foreground'"
+              @click="tab = 'project'">按工地</button>
       <button class="py-2.5 rounded-xl text-sm font-semibold transition-all"
               :class="tab === 'range' ? 'bg-brand-gradient text-white shadow-glow' : 'text-muted-foreground'"
               @click="tab = 'range'">按时间段查询</button>
@@ -78,6 +81,65 @@
       </div>
     </template>
 
+    <!-- 按工地 -->
+    <template v-else-if="tab === 'project'">
+      <div class="surface rounded-2xl p-3 flex flex-wrap items-center gap-2">
+        <SelectMenu v-model="pYear" :options="yearOptions.map(y => ({ value: y, label: `${y} 年` }))" class="!py-2 text-sm" @change="loadProject" />
+        <SelectMenu v-model="pMonth" :options="monthOptions" class="!py-2 text-sm" @change="loadProject" />
+      </div>
+
+      <div class="surface rounded-2xl overflow-hidden">
+        <div v-if="projectRows.length === 0" class="empty-state"><p>该月暂无数据</p></div>
+        <!-- 桌面表格 -->
+        <div class="hidden lg:block overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-muted text-muted-foreground text-xs">
+                <th class="text-left font-semibold px-2.5 sm:px-4 py-2 sm:py-3 whitespace-nowrap">工地</th>
+                <th class="text-right font-semibold px-2.5 sm:px-4 py-2 sm:py-3 whitespace-nowrap tabular-nums">记工笔数</th>
+                <th class="text-right font-semibold px-2.5 sm:px-4 py-2 sm:py-3 whitespace-nowrap tabular-nums">应发工资</th>
+                <th class="text-right font-semibold px-2.5 sm:px-4 py-2 sm:py-3 whitespace-nowrap tabular-nums">借支</th>
+                <th class="text-right font-semibold px-2.5 sm:px-4 py-2 sm:py-3 whitespace-nowrap tabular-nums">净工资</th>
+                <th class="text-right font-semibold px-2.5 sm:px-4 py-2 sm:py-3 whitespace-nowrap tabular-nums">已结算</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border">
+              <tr v-for="r in projectRows" :key="r.project_name" class="hover:bg-muted/50">
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 font-semibold text-foreground">{{ r.project_name }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums">{{ r.record_count }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums">{{ fmtMoney(r.work_amount_cents) }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums text-red-500">{{ r.advance_cents > 0 ? '-' + fmtMoney(r.advance_cents) : '—' }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums font-bold" :class="r.payable_cents < 0 ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'">{{ fmtMoney(r.payable_cents) }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums">{{ fmtMoney(r.settled_cents) }}</td>
+              </tr>
+            </tbody>
+            <tfoot v-if="projectRows.length > 0">
+              <tr class="bg-muted/50 font-bold">
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3">合计</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums">{{ projectTotal.record_count }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums">{{ fmtMoney(projectTotal.work_amount_cents) }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums text-red-500">-{{ fmtMoney(projectTotal.advance_cents) }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums">{{ fmtMoney(projectTotal.payable_cents) }}</td>
+                <td class="px-2.5 sm:px-4 py-2 sm:py-3 text-right tabular-nums">{{ fmtMoney(projectTotal.settled_cents) }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <!-- 移动卡片 -->
+        <div class="lg:hidden divide-y divide-border">
+          <div v-for="r in projectRows" :key="r.project_name" class="p-4">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-semibold text-foreground">{{ r.project_name }}</span>
+              <span class="font-bold tabular-nums" :class="r.payable_cents < 0 ? 'text-red-500' : 'text-emerald-600 dark:text-emerald-400'">{{ fmtMoney(r.payable_cents) }}</span>
+            </div>
+            <div class="text-xs text-muted-foreground mt-1">
+              {{ r.record_count }} 笔 · 工资 {{ fmtMoney(r.work_amount_cents) }}<template v-if="r.advance_cents > 0"> · 借支 {{ fmtMoney(r.advance_cents) }}</template> · 已结 {{ fmtMoney(r.settled_cents) }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <!-- 按时间段查询 -->
     <template v-else>
       <div class="surface rounded-2xl p-3 flex flex-wrap gap-2">
@@ -137,11 +199,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import PageHeader from '../components/PageHeader.vue'
 import SelectMenu from '../components/SelectMenu.vue'
 import Toast from '../components/Toast.vue'
-import { statsMonthly, statsRange, listWorkers, listProjects, downloadExport, type MonthlyStatRow, type WorkRecord, type Worker, type Project } from '../api/worklog'
+import { statsMonthly, statsRange, statsByProject, listWorkers, listProjects, downloadExport, type MonthlyStatRow, type ProjectStatRow, type WorkRecord, type Worker, type Project } from '../api/worklog'
 import { fmtMoney, TYPE_LABELS, todayStr } from '../utils/format'
 
 // 导出：走带认证的 blob 下载（<a href> 在直连端口会 401）
@@ -166,7 +228,7 @@ async function exportCsv(path: string, params: Record<string, unknown>) {
   }
 }
 
-const tab = ref<'monthly' | 'range'>('monthly')
+const tab = ref<'monthly' | 'project' | 'range'>('monthly')
 const now = new Date()
 const year = ref(now.getFullYear())
 const month = ref(now.getMonth() + 1)
@@ -193,6 +255,26 @@ const rangeRecords = ref<WorkRecord[]>([])
 const rangeSummary = ref<{ work_amount_cents: number; advance_cents: number; record_count: number } | null>(null)
 const workers = ref<Worker[]>([])
 const projects = ref<Project[]>([])
+
+// 按工地统计：年份/月份独立于月度页签，切换页签时才加载
+const pYear = ref(now.getFullYear())
+const pMonth = ref(now.getMonth() + 1)
+// 只放真实工地行（含「未分工地」）；合计单独存，避免表格里出现两遍合计
+const projectRows = ref<ProjectStatRow[]>([])
+const emptyProjectTotal = (): ProjectStatRow => ({
+  project_name: '合计', record_count: 0, work_amount_cents: 0, advance_cents: 0, payable_cents: 0, settled_cents: 0,
+})
+const projectTotal = ref<ProjectStatRow>(emptyProjectTotal())
+
+async function loadProject() {
+  try {
+    const res = await statsByProject({ year: pYear.value, month: pMonth.value })
+    if (res.data?.code === 0) {
+      projectRows.value = res.data.data.rows ?? []
+      projectTotal.value = res.data.data.total ?? emptyProjectTotal()
+    }
+  } catch {}
+}
 
 const totalRow = computed(() => {
   const t = { days: 0, hours: 0, pieces: 0, work: 0, advance: 0, net: 0 }
@@ -226,6 +308,10 @@ async function loadRange() {
     }
   } catch {}
 }
+
+watch(tab, (t) => {
+  if (t === 'project' && projectRows.value.length === 0) loadProject()
+})
 
 onMounted(async () => {
   await loadMonthly()

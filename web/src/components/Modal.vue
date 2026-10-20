@@ -36,6 +36,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { isTopOverlay, popOverlay, pushOverlay } from '../utils/overlay-stack'
 
 // closable 必须给默认 true：仅声明为可选 Boolean 时，Vue 运行时会把
 // 未传的值转换成 false 而不是 undefined，导致默认的 X/遮罩关闭全部失效
@@ -54,6 +55,16 @@ const emit = defineEmits<{
 function handleClose() {
   if (props.closable !== false) {
     emit('update:modelValue', false)
+  }
+}
+
+// ESC 关闭：与 ConfirmDialog.vue 保持一致的键盘出口。
+// 浮层可以叠加，ESC 只关最上面那一层，否则一次按键会连带关掉下面的弹窗。
+const overlayToken = ref<number | null>(null)
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && props.modelValue && overlayToken.value !== null && isTopOverlay(overlayToken.value)) {
+    handleClose()
   }
 }
 
@@ -93,23 +104,38 @@ watch(
     document.body.style.overflow = open ? 'hidden' : ''
     if (open) {
       measureKeyboard()
+      // 打开时才入栈：组件常驻在模板里，创建时就入栈会把没打开的浮层也混进栈
+      if (overlayToken.value === null) {
+        overlayToken.value = pushOverlay()
+      }
     } else {
       kbInset.value = 0
+      if (overlayToken.value !== null) {
+        popOverlay(overlayToken.value)
+        overlayToken.value = null
+      }
     }
   },
+  { immediate: true },
 )
 
 onMounted(() => {
   window.visualViewport?.addEventListener('resize', measureKeyboard)
   window.visualViewport?.addEventListener('scroll', measureKeyboard)
   document.addEventListener('focusin', onFocusIn)
+  document.addEventListener('keydown', onKeydown)
 })
 
 onBeforeUnmount(() => {
   window.visualViewport?.removeEventListener('resize', measureKeyboard)
   window.visualViewport?.removeEventListener('scroll', measureKeyboard)
   document.removeEventListener('focusin', onFocusIn)
+  document.removeEventListener('keydown', onKeydown)
   document.body.style.overflow = ''
+  if (overlayToken.value !== null) {
+    popOverlay(overlayToken.value)
+    overlayToken.value = null
+  }
 })
 </script>
 

@@ -73,7 +73,15 @@
     <Teleport to="body">
       <transition enter-active-class="transition duration-200" enter-from-class="opacity-0" leave-active-class="transition duration-150" leave-to-class="opacity-0">
         <div v-if="showFnOSConfirm" class="fixed inset-0 z-[100] flex items-center justify-center bg-black/65 px-4 sm:backdrop-blur-sm" @click.self="closeFnOSConfirm">
-          <section role="dialog" aria-modal="true" aria-labelledby="fnos-confirm-title" class="w-full max-w-md rounded-3xl border border-white/15 bg-[#171827] p-6 text-white shadow-2xl sm:p-8">
+          <section role="dialog" aria-modal="true" aria-labelledby="fnos-confirm-title" class="relative w-full max-w-md rounded-3xl border border-white/15 bg-[#171827] p-6 text-white shadow-2xl sm:p-8">
+            <button
+              type="button"
+              aria-label="关闭"
+              @click="closeFnOSConfirm"
+              class="absolute right-3 top-3 inline-flex h-11 w-11 items-center justify-center rounded-xl text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+            >
+              <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
             <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-brand-500 to-violet-500 text-2xl font-bold shadow-lg shadow-brand-500/25">
               {{ fnosConfirmUsername.slice(0, 1) || '飞' }}
             </div>
@@ -90,7 +98,7 @@
               使用其他飞牛账号
             </button>
             <p v-else class="mt-3 text-xs leading-5 text-white/45">如需更换飞牛账号，请在飞牛 App 中切换后重新打开本应用。</p>
-            <button type="button" :disabled="loading" @click="closeFnOSConfirm" class="mt-1 w-full rounded-xl px-4 py-2 text-sm text-white/55 transition-colors hover:text-white/80 disabled:opacity-60">取消</button>
+            <button type="button" @click="closeFnOSConfirm" class="mt-1 w-full rounded-xl px-4 py-2 text-sm text-white/55 transition-colors hover:text-white/80">取消</button>
           </section>
         </div>
       </transition>
@@ -230,10 +238,10 @@ async function handleFnOSAuthorize() {
   }
 }
 
+// 关闭出口：任何时候都要能关。之前的 if (!loading.value) 让请求挂起期间
+// 取消按钮与点遮罩同时失效，确认框变成死界面。
 function closeFnOSConfirm() {
-  if (!loading.value) {
-    showFnOSConfirm.value = false
-  }
+  showFnOSConfirm.value = false
 }
 
 // 换飞牛账号：弹窗打开飞牛登录页，主页面与确认框保持原位不跳转；换完（或弹窗

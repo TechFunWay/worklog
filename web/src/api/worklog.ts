@@ -7,6 +7,7 @@ export interface Worker {
   note?: string
   daily_wage_cents?: number
   hourly_wage_cents?: number
+  monthly_wage_cents?: number
   status?: string
 }
 
@@ -158,9 +159,20 @@ export interface MonthlyStatRow {
   advance_cents: number
   payable_cents: number
 }
+// 按工地统计的一行（含末行「合计」；未分工地的行 project_name 为「未分工地」）
+export interface ProjectStatRow {
+  project_id?: number | null
+  project_name: string
+  record_count: number
+  work_amount_cents: number
+  advance_cents: number
+  payable_cents: number
+  settled_cents: number
+}
 export const statsDashboard = () => request.get('/api/worklog/stats/dashboard')
 export const statsMonthly = (params: Record<string, unknown>) => request.get('/api/worklog/stats/monthly', { params })
 export const statsRange = (params: Record<string, unknown>) => request.get('/api/worklog/stats/range', { params })
+export const statsByProject = (params: Record<string, unknown>) => request.get('/api/worklog/stats/project', { params })
 
 // ---- 导出 ----
 // 导出接口需要认证：直连端口只有 Authorization（没有会话 Cookie），而浏览器

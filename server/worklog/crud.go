@@ -110,6 +110,7 @@ func updateWorker(db *gorm.DB) gin.HandlerFunc {
 		item.Note = in.Note
 		item.DailyWageCents = in.DailyWageCents
 		item.HourlyWageCents = in.HourlyWageCents
+		item.MonthlyWageCents = in.MonthlyWageCents
 		if in.Status == "active" || in.Status == "archived" {
 			item.Status = in.Status
 		}
@@ -433,14 +434,19 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 		}
 	}
 
-	// 单价：未传则带默认值（工人日薪/时薪或计件项目单价）
+	// 单价：未传则带默认值（工人日薪/时薪或计件项目单价）。
+	// 月薪工（填了月薪）点工按当月实际天数折算日薪，缺勤不记工即自然扣款。
 	price := int64(0)
 	if in.UnitPriceCents != nil {
 		price = *in.UnitPriceCents
 	} else {
 		switch in.Type {
 		case TypeDay:
-			price = worker.DailyWageCents
+			if worker.MonthlyWageCents > 0 {
+				price = dailyFromMonthly(worker.MonthlyWageCents, in.Date)
+			} else {
+				price = worker.DailyWageCents
+			}
 		case TypeHour:
 			price = worker.HourlyWageCents
 		case TypePiece:

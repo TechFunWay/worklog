@@ -108,11 +108,27 @@ func loadAccess(db *gorm.DB, uid uint) *access {
 func (a *access) scopeUser() uint { return a.OwnerUID }
 
 // workerScope 供 worker 角色强制过滤自己的记录；非 worker 返回 false。
+//
+// worker 角色但成员行没绑工人档案（WorkerID 为 nil，历史数据或半途失败的事务
+// 会留下这种行）时返回 (0, true)：0 不是合法工人 ID，凡是 `worker_id = ?` /
+// `id = ?` 的过滤都会落空。**必须 fail closed**——早先这里返回 false，调用方
+// 见 ok=false 就不加过滤，等于把老板视角的全量数据交给一名普通员工（2026-10-18
+// 审查实测复现）。需要「全部数据」的只有老板/组长，那条路 Role 不是 worker。
 func (a *access) workerScope() (uint, bool) {
-	if a.Role == RoleWorker && a.SelfWorkerID != nil {
-		return *a.SelfWorkerID, true
+	if a.Role == RoleWorker {
+		if a.SelfWorkerID != nil {
+			return *a.SelfWorkerID, true
+		}
+		return 0, true
 	}
 	return 0, false
+}
+
+// workerUnbound 标记「worker 角色但未绑定工人档案」这种不完整状态。
+// 调用方在 workerScope 命中的前提下，若拿到的 id 为 0，应直接拒绝而不是
+// 退回「全部」或「第一个工人」。
+func (a *access) workerUnbound() bool {
+	return a.Role == RoleWorker && a.SelfWorkerID == nil
 }
 
 func requireManage(ac *access) bool { return ac.canManage() }

@@ -51,7 +51,7 @@
           <input v-model="form.note" class="input-field" placeholder="选填" />
         </div>
         <div class="flex gap-3">
-          <button type="button" class="btn-ghost min-h-11 flex-1" :disabled="saving" @click="closeForm">取消</button>
+          <button type="button" class="btn-ghost min-h-11 flex-1" @click="closeForm">取消</button>
           <button type="button" class="btn-brand min-h-11 flex-1" :disabled="saving" @click="save">保存</button>
         </div>
       </div>
@@ -92,9 +92,10 @@ function openForm(p?: PieceItem) {
   formOpen.value = true
 }
 
-// 取消：只关闭弹窗，不提交表单（保存中不允许关闭，与保存按钮同步禁用）
+// 取消：只关闭弹窗，不提交表单。
+// 与右上角 X 保持一致——保存中 X 仍可关，这里也不该把用户堵在弹窗里；
+// 保存请求会自行结束（save() 的 finally 会把 saving 复位），关掉弹窗不影响结果。
 function closeForm() {
-  if (saving.value) return
   formOpen.value = false
 }
 
