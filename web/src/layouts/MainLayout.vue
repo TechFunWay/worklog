@@ -115,7 +115,7 @@
       <header class="sticky top-0 z-20 px-3 sm:px-4 lg:px-8 pt-2 sm:pt-3">
         <div class="h-12 sm:h-16 flex items-center justify-between px-3 sm:px-6 rounded-2xl surface">
           <div class="flex items-center gap-2 sm:gap-3 min-w-0">
-            <button class="lg:hidden p-2 -ml-1 rounded-lg text-foreground hover:bg-muted" @click="sidebarOpen = !sidebarOpen">
+            <button class="lg:hidden -ml-1 inline-flex shrink-0 items-center justify-center min-w-11 min-h-11 rounded-lg text-foreground hover:bg-muted" aria-label="打开菜单" @click="sidebarOpen = !sidebarOpen">
               <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" /></svg>
             </button>
             <div class="min-w-0 flex-1">
@@ -171,7 +171,7 @@
           <span class="min-w-0 truncate text-foreground">
             ❤ <button class="font-semibold text-brand-600 hover:underline dark:text-brand-300" @click="supportStore.open()">请作者喝杯咖啡</button><span class="hidden sm:inline"> 如果这个应用对你有帮助，欢迎（不赞赏不影响任何功能）。</span>
           </span>
-          <button class="shrink-0 px-1 text-lg leading-none text-muted-foreground hover:text-foreground" title="关闭" aria-label="关闭赞赏横幅" @click="supportStore.dismissBanner()">×</button>
+          <button class="shrink-0 inline-flex items-center justify-center min-w-11 min-h-11 -mr-2 text-lg leading-none text-muted-foreground hover:text-foreground" title="关闭" aria-label="关闭赞赏横幅" @click="supportStore.dismissBanner()">×</button>
         </div>
 
         <RouterView v-slot="{ Component }">
@@ -210,8 +210,9 @@
       </button>
     </nav>
 
-    <!-- Security question prompt -->
-    <Modal v-model="showSecurityModal" title="设置安全问题" :closable="false">
+    <!-- Security question prompt：可关闭（X / 点遮罩 / ESC 都算「稍后再说」），
+         之前用 :closable="false" 把三条关闭路径一次性打死，用户被困在弹窗里。 -->
+    <Modal v-model="showSecurityModal" title="设置安全问题" @update:modelValue="onSecurityModalChange">
       <div class="flex flex-col items-center text-center gap-4 py-2">
         <div class="w-14 h-14 rounded-2xl bg-amber-400/15 text-amber-400 flex items-center justify-center">
           <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
@@ -420,6 +421,13 @@ function goToSecurityQuestions() {
 function dismissSecurityPrompt() {
   showSecurityModal.value = false
   authStore.dismissSecurityPrompt()
+}
+
+// X / 点遮罩 / ESC 关闭时同样记一次「稍后再说」，避免刷新后弹窗立刻又弹回来
+function onSecurityModalChange(open: boolean) {
+  if (!open) {
+    authStore.dismissSecurityPrompt()
+  }
 }
 
 function onClickOutside(e: MouseEvent) {

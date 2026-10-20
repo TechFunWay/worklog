@@ -12,7 +12,7 @@
           class="relative bg-surface text-foreground shadow-xl w-full max-w-[320px] rounded-2xl px-5 pt-5 pb-4 text-center"
         >
           <button
-            class="absolute right-2.5 top-2.5 z-10 p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            class="absolute right-2 top-2 z-10 inline-flex items-center justify-center min-w-11 min-h-11 rounded-xl text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
             aria-label="关闭"
             @click="support.dismiss()"
           >

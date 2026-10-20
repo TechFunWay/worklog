@@ -86,6 +86,11 @@
           </button>
         </div>
 
+        <!-- 月薪工提示：自动折算日薪 + 缺勤扣款口径 -->
+        <div v-if="isMonthlyWorker && form.type === 'day'" class="rounded-xl bg-brand-500/10 border border-brand-500/20 px-3 py-2 text-xs text-brand-700 dark:text-brand-300">
+          {{ editingWorker?.name }} 是月薪工（月薪 {{ fmtMoney(editingWorker?.monthly_wage_cents ?? 0) }}），单价已按当月天数自动折算日薪；缺勤一天不记工即扣一天折算日薪。
+        </div>
+
         <!-- 数量 -->
         <div v-if="form.type !== 'rest'">
           <label class="text-sm font-medium text-foreground block mb-1.5">{{ quantityLabel }}</label>
@@ -142,13 +147,13 @@
 
         <!-- 金额预览 -->
         <div class="rounded-xl sm:rounded-2xl bg-muted p-3 sm:p-4 flex items-center justify-between">
-          <span class="text-sm text-muted-foreground">{{ form.type === 'rest' ? '休息不计工资' : multiDays.length > 1 ? `共 ${multiDays.length} 天合计` : '本次工资' }}</span>
+          <span class="text-sm text-muted-foreground">{{ form.type === 'rest' ? '休息不计工资' : multiDays.length > 1 ? `共 ${multiDays.length} 天合计` : isMonthlyWorker && form.type === 'day' ? '本次工资（月薪折算）' : '本次工资' }}</span>
           <span class="text-xl sm:text-2xl font-extrabold text-brand-600 dark:text-brand-400 font-display tabular-nums">{{ previewAmount }}</span>
         </div>
 
         <div class="flex gap-2 pt-0.5 sm:pt-1">
           <button v-if="editingId" class="btn-ghost flex-1 !text-red-500" @click="askDeleteRecord(editingId)">删除</button>
-          <button class="btn-ghost flex-1" :disabled="saving" @click="editorOpen = false">取消</button>
+          <button class="btn-ghost flex-1" @click="editorOpen = false">取消</button>
           <button v-if="!editingId" class="btn-ghost flex-1" :disabled="saving" @click="saveRecord(true)">确认并再记一笔</button>
           <button class="btn-brand flex-1" :disabled="saving" @click="saveRecord(false)">{{ editingId ? '保存修改' : '确认记工' }}</button>
         </div>
@@ -292,7 +297,14 @@ function onTypeChange() {
 function applyDefaultPrice() {
   if (!editingWorker.value) return
   const w = editingWorker.value
-  if (form.value.type === 'day') priceInput.value = w.daily_wage_cents ? (w.daily_wage_cents / 100).toFixed(2) : ''
+  if (form.value.type === 'day') {
+    // 月薪工：按记工日期所在月的天数折算日薪（缺勤不记工即自然扣款）
+    if (w.monthly_wage_cents && w.monthly_wage_cents > 0) {
+      priceInput.value = (monthlyDailyCents(w.monthly_wage_cents, selectedDate.value) / 100).toFixed(2)
+    } else {
+      priceInput.value = w.daily_wage_cents ? (w.daily_wage_cents / 100).toFixed(2) : ''
+    }
+  }
   else if (form.value.type === 'hour') priceInput.value = w.hourly_wage_cents ? (w.hourly_wage_cents / 100).toFixed(2) : ''
   else if (form.value.type === 'piece') {
     const p = pieceItems.value.find((x) => x.id === Number(form.value.piece_item_id))
@@ -300,12 +312,33 @@ function applyDefaultPrice() {
   }
 }
 
+// 月薪折算日薪（分）：月薪 ÷ 当月实际天数，四舍五入（与后端 dailyFromMonthly 同口径）。
+function monthlyDailyCents(monthlyCents: number, date: string): number {
+  return Math.round(monthlyCents / daysInMonthOf(date))
+}
+
+// 某日期所在月份的实际天数（与后端 daysInMonthOf 同口径）
+function daysInMonthOf(date: string): number {
+  const d = new Date(date + 'T00:00:00')
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+}
+
+const isMonthlyWorker = computed(() => !!editingWorker.value?.monthly_wage_cents)
+
 const previewAmount = computed(() => {
   if (form.value.type === 'rest') return fmtMoney(0)
   const q = parseFloat(form.value.quantity) || 0
   const price = parseFloat(priceInput.value) || 0
   const one = Math.round(q * price * 100)
-  return fmtMoney(one * Math.max(1, multiDays.value.length))
+  const days = Math.max(1, multiDays.value.length)
+  // 月薪工：工资 = 折算日薪 × 天数 = 月薪 × 天数 ÷ 当月天数（小数先加、最后只取整一次，
+  // 避免每天四舍五入累积误差，保证「记满整月 = 月薪」）。
+  const w = editingWorker.value
+  if (isMonthlyWorker.value && form.value.type === 'day' && w?.monthly_wage_cents) {
+    const monthDays = daysInMonthOf(selectedDate.value)
+    return fmtMoney(Math.round(w.monthly_wage_cents * q * days / monthDays))
+  }
+  return fmtMoney(one * days)
 })
 
 const dayTotalCents = computed(() => rows.value.reduce((s, r) => s + r.amount_cents, 0))

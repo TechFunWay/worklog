@@ -8,18 +8,20 @@ import (
 	"time"
 )
 
-// Worker 工人档案。日薪/时薪为记工录入时的默认单价。
+// Worker 工人档案。日薪/时薪为记工录入时的默认单价；月薪工只填月薪，
+// 记工时按当月实际天数自动折算日薪（缺勤不记工即自然扣款）。
 type Worker struct {
-	ID              uint      `gorm:"primarykey" json:"id"`
-	UserID          uint      `gorm:"index;not null" json:"-"`
-	Name            string    `gorm:"not null" json:"name"`
-	Phone           string    `json:"phone"`
-	Note            string    `json:"note"`
-	DailyWageCents  int64     `json:"daily_wage_cents"`
-	HourlyWageCents int64     `json:"hourly_wage_cents"`
-	Status          string    `gorm:"default:active;index" json:"status"` // active / archived
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               uint      `gorm:"primarykey" json:"id"`
+	UserID           uint      `gorm:"index;not null" json:"-"`
+	Name             string    `gorm:"not null" json:"name"`
+	Phone            string    `json:"phone"`
+	Note             string    `json:"note"`
+	DailyWageCents   int64     `json:"daily_wage_cents"`
+	HourlyWageCents  int64     `json:"hourly_wage_cents"`
+	MonthlyWageCents int64     `json:"monthly_wage_cents"`
+	Status           string    `gorm:"default:active;index" json:"status"` // active / archived
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // Project 工地/项目（选填维度）。

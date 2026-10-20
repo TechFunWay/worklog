@@ -22,7 +22,9 @@
               </span>
             </div>
             <div class="text-xs text-muted-foreground mt-0.5">
-              <span v-if="w.phone">{{ w.phone }} · </span>日薪 {{ fmtMoney(w.daily_wage_cents) }} · 时薪 {{ fmtMoney(w.hourly_wage_cents) }}
+              <span v-if="w.phone">{{ w.phone }} · </span>
+              <template v-if="w.monthly_wage_cents">月薪 {{ fmtMoney(w.monthly_wage_cents) }}（按当月天数折算日薪）</template>
+              <template v-else>日薪 {{ fmtMoney(w.daily_wage_cents) }} · 时薪 {{ fmtMoney(w.hourly_wage_cents) }}</template>
             </div>
             <div v-if="w.note" class="text-xs text-muted-foreground/80 mt-0.5 truncate">{{ w.note }}</div>
           </div>
@@ -43,12 +45,19 @@
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-sm font-medium text-foreground block mb-1.5">日薪（元）</label>
-            <input v-model="dailyInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="0.00" />
+            <label class="text-sm font-medium text-foreground block mb-1.5">月薪（元）</label>
+            <input v-model="monthlyInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="如 10000" />
+            <p class="text-xs text-muted-foreground mt-1">填了月薪的点工按当月天数自动折算日薪</p>
           </div>
-          <div>
-            <label class="text-sm font-medium text-foreground block mb-1.5">时薪（元）</label>
-            <input v-model="hourlyInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="0.00" />
+          <div class="grid grid-rows-2 gap-2">
+            <div>
+              <label class="text-sm font-medium text-foreground block mb-0.5 text-xs">日薪（元）</label>
+              <input v-model="dailyInput" type="text" inputmode="decimal" class="input-field tabular-nums !py-1.5" placeholder="0.00" />
+            </div>
+            <div>
+              <label class="text-sm font-medium text-foreground block mb-0.5 text-xs">时薪（元）</label>
+              <input v-model="hourlyInput" type="text" inputmode="decimal" class="input-field tabular-nums !py-1.5" placeholder="0.00" />
+            </div>
           </div>
         </div>
         <div>
@@ -60,7 +69,7 @@
           <input v-model="form.note" class="input-field" placeholder="选填" />
         </div>
         <div class="flex gap-3">
-          <button type="button" class="btn-ghost min-h-11 flex-1" :disabled="saving" @click="closeForm">取消</button>
+          <button type="button" class="btn-ghost min-h-11 flex-1" @click="closeForm">取消</button>
           <button type="button" class="btn-brand min-h-11 flex-1" :disabled="saving" @click="save">保存</button>
         </div>
       </div>
@@ -88,6 +97,7 @@ const toastType = ref<'success' | 'error'>('success')
 const form = ref<Worker>({ name: '' })
 const dailyInput = ref('')
 const hourlyInput = ref('')
+const monthlyInput = ref('')
 
 async function load() {
   try {
@@ -100,12 +110,14 @@ function openForm(w?: Worker) {
   form.value = w ? { ...w } : { name: '', status: 'active' }
   dailyInput.value = centsToYuanInput(w?.daily_wage_cents)
   hourlyInput.value = centsToYuanInput(w?.hourly_wage_cents)
+  monthlyInput.value = centsToYuanInput(w?.monthly_wage_cents)
   formOpen.value = true
 }
 
-// 取消：只关闭弹窗，不提交表单（保存中不允许关闭，与保存按钮同步禁用）
+// 取消：只关闭弹窗，不提交表单。
+// 与右上角 X 保持一致——保存中 X 仍可关，这里也不该把用户堵在弹窗里；
+// 保存请求会自行结束（save() 的 finally 会把 saving 复位），关掉弹窗不影响结果。
 function closeForm() {
-  if (saving.value) return
   formOpen.value = false
 }
 
@@ -138,9 +150,10 @@ async function save() {
   if (!form.value.name.trim()) return toast('请填写姓名', 'error')
   const daily = parseCents(dailyInput.value)
   const hourly = parseCents(hourlyInput.value)
-  if (daily === null || hourly === null) return toast('薪资格式不正确', 'error')
+  const monthly = parseCents(monthlyInput.value)
+  if (daily === null || hourly === null || monthly === null) return toast('薪资格式不正确', 'error')
   saving.value = true
-  const payload: Worker = { ...form.value, daily_wage_cents: daily, hourly_wage_cents: hourly }
+  const payload: Worker = { ...form.value, daily_wage_cents: daily, hourly_wage_cents: hourly, monthly_wage_cents: monthly }
   try {
     if (payload.id) await updateWorker(payload.id, payload)
     else await createWorker(payload)

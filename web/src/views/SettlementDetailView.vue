@@ -1,6 +1,16 @@
 <template>
   <div class="page-container animate-fade-in">
     <PageHeader title="工资条" :description="`单号 JS${serial}`">
+      <template #back>
+        <button
+          type="button"
+          aria-label="返回结算列表"
+          class="inline-flex shrink-0 items-center justify-center min-w-11 min-h-11 -ml-1 rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          @click="goBack"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+        </button>
+      </template>
       <template #actions>
         <div class="flex gap-2">
           <button class="btn-ghost !px-3 !py-2 text-xs sm:!px-4 sm:!py-2.5 sm:text-sm" @click="copyText">复制文字</button>
@@ -216,6 +226,11 @@ function copyText() {
     () => toast('已复制，可粘贴发给工人'),
     () => toast('复制失败', 'error'),
   )
+}
+
+// 返回结算列表：工资条是二级页面，之前没有任何返回/关闭入口
+function goBack() {
+  router.push('/admin/settlements')
 }
 
 function revert() {

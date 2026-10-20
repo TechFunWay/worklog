@@ -218,6 +218,10 @@ func settlementPreview(db *gorm.DB) gin.HandlerFunc {
 		uid = ac.scopeUser()
 		workerID := utils.Atoi(c.Query("worker_id"), 0)
 		if sw, ok := ac.workerScope(); ok {
+			if ac.workerUnbound() {
+				forbidden(c)
+				return
+			}
 			workerID = int(sw) // 员工只能预览自己
 		}
 		if workerID <= 0 {

@@ -296,6 +296,12 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 
 		workerID := utils.Atoi(c.Query("worker_id"), 0)
 		if sw, ok := ac.workerScope(); ok {
+			// 成员行没绑工人档案：不能落到下面的「取第一个在职工人」，
+			// 那等于把别的工人的考勤交给这名员工。
+			if ac.workerUnbound() {
+				forbidden(c)
+				return
+			}
 			workerID = int(sw)
 		}
 		if workerID <= 0 {
@@ -377,4 +383,135 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 			"cells":        cells,
 		})
 	}
+}
+
+// projectStatRow 按工地统计的一行：记工笔数、应发工资、借支、净工资与已结算。
+// 收支账（收入/支出）不属于本功能，这里不输出该维度。
+type projectStatRow struct {
+	ProjectID       *uint  `json:"project_id"`
+	ProjectName     string `json:"project_name"`
+	RecordCount     int64  `json:"record_count"`
+	WorkAmountCents int64  `json:"work_amount_cents"`
+	AdvanceCents    int64  `json:"advance_cents"`
+	PayableCents    int64  `json:"payable_cents"`
+	SettledCents    int64  `json:"settled_cents"`
+}
+
+// statsByProject 按工地单独统计工资（可限定月份），末行附带「未分工地」与合计。
+func statsByProject(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := currentUID(c)
+		ac := loadAccess(db, uid)
+		dsUID := ac.scopeUser()
+		now := time.Now()
+		year := atoiDefault(c.Query("year"), now.Year())
+		month := atoiDefault(c.Query("month"), int(now.Month()))
+		if month < 1 || month > 12 {
+			response.ErrorBadRequest(c, "月份不正确")
+			return
+		}
+		start, end := monthRange(year, month)
+		dateQ := "user_id = ? AND date BETWEEN ? AND ?"
+
+		// 工资与借支按 project_id 分组（SQL 层聚合，避免 N+1）
+		type workSum struct {
+			ProjectID *uint
+			Cnt       int64
+			Amount    int64
+		}
+		var workSums []workSum
+		if err := db.Model(&WorkRecord{}).Where(dateQ, dsUID, start, end).
+			Select("project_id, COUNT(*) AS cnt, COALESCE(SUM(amount_cents),0) AS amount").
+			Group("project_id").Scan(&workSums).Error; err != nil {
+			response.ErrorInternal(c, "统计失败")
+			return
+		}
+		// 已结算金额按结算单的项目维度汇总（借支只挂工人，无工地维度，不参与分组）
+		type setSum struct {
+			ProjectID *uint
+			Amount    int64
+		}
+		var setSums []setSum
+		if err := db.Model(&Settlement{}).Where("user_id = ? AND settled_at >= ? AND settled_at < ?", dsUID, start+" 00:00:00", monthEndExclusive(year, month)).
+			Select("project_id, COALESCE(SUM(work_amount_cents),0) AS amount").
+			Group("project_id").Scan(&setSums).Error; err != nil {
+			response.ErrorInternal(c, "统计失败")
+			return
+		}
+		rows := map[uint]*projectStatRow{}
+		var noProject *projectStatRow
+		getRow := func(pid *uint) *projectStatRow {
+			if pid == nil {
+				if noProject == nil {
+					noProject = &projectStatRow{}
+				}
+				return noProject
+			}
+			row := rows[*pid]
+			if row == nil {
+				row = &projectStatRow{ProjectID: pid}
+				rows[*pid] = row
+			}
+			return row
+		}
+		for _, s := range workSums {
+			row := getRow(s.ProjectID)
+			row.RecordCount += s.Cnt
+			row.WorkAmountCents += s.Amount
+		}
+		for _, s := range setSums {
+			getRow(s.ProjectID).SettledCents += s.Amount
+		}
+
+		// 填充工地名称
+		names := map[uint]string{}
+		if len(rows) > 0 {
+			ids := make([]uint, 0, len(rows))
+			for id := range rows {
+				ids = append(ids, id)
+			}
+			var projects []Project
+			db.Where("id IN ?", ids).Find(&projects)
+			for _, p := range projects {
+				names[p.ID] = p.Name
+			}
+		}
+
+		result := make([]projectStatRow, 0, len(rows)+1)
+		var total projectStatRow
+		total.ProjectName = "合计"
+		for id, row := range rows {
+			row.ProjectName = names[id]
+			result = append(result, *row)
+		}
+		for i := 0; i < len(result); i++ {
+			for j := i + 1; j < len(result); j++ {
+				if result[j].ProjectName < result[i].ProjectName {
+					result[i], result[j] = result[j], result[i]
+				}
+			}
+		}
+		if noProject != nil {
+			noProject.ProjectName = "未分工地"
+			result = append(result, *noProject)
+		}
+		for i := range result {
+			result[i].PayableCents = result[i].WorkAmountCents - result[i].AdvanceCents
+		}
+		for _, row := range result {
+			total.RecordCount += row.RecordCount
+			total.WorkAmountCents += row.WorkAmountCents
+			total.AdvanceCents += row.AdvanceCents
+			total.PayableCents += row.PayableCents
+			total.SettledCents += row.SettledCents
+		}
+		response.Success(c, gin.H{"year": year, "month": month, "start": start, "end": end, "rows": result, "total": total})
+	}
+}
+
+// monthEndExclusive 月份结束的排他上界（下月 1 日 0 点），用于对时间戳字段
+// （如 Settlement.settled_at）做区间过滤，避免依赖 SQLite 对字符串日期的隐式比较。
+func monthEndExclusive(year, month int) string {
+	first := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.Local)
+	return first.AddDate(0, 1, 0).Format("2006-01-02 15:04:05")
 }

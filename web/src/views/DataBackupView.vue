@@ -63,12 +63,15 @@
       </div>
     </div>
 
-    <Modal v-model="showConfirm" title="确认恢复数据" :closable="!uploading">
+    <!-- 恢复确认弹窗：任何时候都要留关闭出口。
+         之前 :closable="!uploading" 在上传期间把 X / 遮罩 / 取消 / 确认一起禁用，
+         一旦上传卡住，界面就彻底锁死、用户只能重启服务。 -->
+    <Modal v-model="showConfirm" title="确认恢复数据">
       <div class="space-y-4 text-sm">
         <p>将使用备份文件 <strong class="break-all">{{ restoreFile?.name }}</strong> 覆盖当前全部数据（包括账号、工人档案、记工、借支与结算记录）。</p>
         <p class="text-destructive">此操作不可撤销；确认前建议先点「下载数据库备份」留好当前数据的备份。</p>
         <div class="flex gap-3">
-          <button class="btn-ghost flex-1" :disabled="uploading" @click="showConfirm = false">取消</button>
+          <button class="btn-ghost flex-1" @click="showConfirm = false">取消</button>
           <button class="btn-brand flex-1" :disabled="uploading" @click="doRestore">{{ uploading ? '上传中…' : '确认恢复' }}</button>
         </div>
       </div>

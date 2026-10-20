@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"smallgo/server/response"
@@ -76,7 +77,35 @@ var methodLabels = map[string]string{
 	"cash":    "现金",
 	"wechat":  "微信",
 	"alipay":  "支付宝",
+	"bank":    "银行转账",
 	"other":   "其他",
+}
+
+// dailyFromMonthly 月薪折算日薪：月薪 ÷ 当月实际天数，四舍五入到分。
+// 缺勤一天扣的钱 = 这里的折算日薪 × 缺勤天数（记工时缺勤日不记工即自然扣款）。
+func dailyFromMonthly(monthlyCents int64, date string) int64 {
+	if monthlyCents <= 0 {
+		return 0
+	}
+	days := daysInMonthOf(date)
+	if days <= 0 {
+		days = 30
+	}
+	return int64(math.Round(float64(monthlyCents) / float64(days)))
+}
+
+// daysInMonthOf 解析 YYYY-MM-DD 所在月份的实际天数；解析失败返回 0。
+func daysInMonthOf(date string) int {
+	t, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return 0
+	}
+	return daysInMonth(t.Year(), int(t.Month()))
+}
+
+// daysInMonth 某年某月的实际天数。
+func daysInMonth(year, month int) int {
+	return time.Date(year, time.Month(month)+1, 0, 0, 0, 0, 0, time.Local).Day()
 }
 
 func centsToYuanString(cents int64) string {

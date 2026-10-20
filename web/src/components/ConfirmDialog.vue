@@ -2,10 +2,23 @@
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="modelValue" class="fixed inset-0 z-50 flex items-end sm:items-center sm:justify-center" @click.self="handleCancel">
-        <div class="absolute inset-0 bg-black bg-opacity-50"></div>
+        <!-- 遮罩层铺满整个视口，根节点的 @click.self 永远不会触发，
+             所以关闭必须由遮罩自己处理，否则「点暗处关闭」形同虚设。 -->
+        <div class="absolute inset-0 bg-black bg-opacity-50" @click="handleCancel"></div>
         <div class="relative bg-surface text-foreground shadow-xl w-full sm:max-w-sm sm:mx-4 rounded-t-2xl sm:rounded-2xl px-5 pt-4 pb-[calc(20px+env(safe-area-inset-bottom))] sm:p-6">
           <div class="sm:hidden mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" aria-hidden="true"></div>
-          <h3 class="text-base sm:text-lg font-bold text-foreground mb-1.5 sm:mb-2">{{ title }}</h3>
+          <!-- 标题栏：与 Modal.vue 保持一致，右上角固定 X 关闭按钮（触控区 44px） -->
+          <div class="flex items-start justify-between gap-3 mb-1.5 sm:mb-2">
+            <h3 class="min-w-0 flex-1 text-base sm:text-lg font-bold text-foreground">{{ title }}</h3>
+            <button
+              type="button"
+              aria-label="关闭"
+              class="-mr-2 -mt-1 inline-flex shrink-0 items-center justify-center min-w-11 min-h-11 rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              @click="handleCancel"
+            >
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+            </button>
+          </div>
           <p class="text-sm text-muted-foreground mb-5 sm:mb-6 whitespace-pre-line">{{ message }}</p>
           <div class="flex space-x-3">
             <button
@@ -31,6 +44,9 @@
 </template>
 
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { isTopOverlay, popOverlay, pushOverlay } from '../utils/overlay-stack'
+
 const props = withDefaults(defineProps<{
   modelValue: boolean
   title?: string
@@ -59,6 +75,44 @@ function handleCancel() {
   emit('update:modelValue', false)
   emit('cancel')
 }
+
+// ESC 关闭：与 Modal.vue 的交互口径保持一致。
+// 浮层可以叠加，ESC 只关最上面那一层，否则一次按键会连带关掉下面的弹窗。
+const overlayToken = ref<number | null>(null)
+
+function onKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && props.modelValue && overlayToken.value !== null && isTopOverlay(overlayToken.value)) {
+    handleCancel()
+  }
+}
+
+watch(
+  () => props.modelValue,
+  (open) => {
+    // 打开时才入栈：组件常驻在模板里，创建时就入栈会把没打开的浮层也混进栈
+    if (open) {
+      if (overlayToken.value === null) {
+        overlayToken.value = pushOverlay()
+      }
+    } else if (overlayToken.value !== null) {
+      popOverlay(overlayToken.value)
+      overlayToken.value = null
+    }
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeydown)
+  if (overlayToken.value !== null) {
+    popOverlay(overlayToken.value)
+    overlayToken.value = null
+  }
+})
 </script>
 
 <style scoped>

@@ -145,7 +145,10 @@
       <div class="space-y-3">
         <input v-model="newTeamName" class="input-field" placeholder="班组名称，如：张记工程队" />
         <input v-model="newTeamNote" class="input-field" placeholder="备注（选填）" />
-        <button class="btn-brand w-full min-h-11" :disabled="saving" @click="create">创建班组</button>
+        <div class="flex gap-2 pt-1">
+          <button class="btn-ghost flex-1 min-h-11" @click="createOpen = false">取消</button>
+          <button class="btn-brand flex-1 min-h-11" :disabled="saving" @click="create">创建班组</button>
+        </div>
       </div>
     </Modal>
 
@@ -154,7 +157,10 @@
       <div class="space-y-3">
         <input v-model="editName" class="input-field" placeholder="班组名称" />
         <input v-model="editNote" class="input-field" placeholder="备注（选填）" />
-        <button class="btn-brand w-full min-h-11" :disabled="saving" @click="saveEditTeam">保存</button>
+        <div class="flex gap-2 pt-1">
+          <button class="btn-ghost flex-1 min-h-11" @click="editOpen = false">取消</button>
+          <button class="btn-brand flex-1 min-h-11" :disabled="saving" @click="saveEditTeam">保存</button>
+        </div>
       </div>
     </Modal>
 
@@ -170,7 +176,10 @@
           <input v-model="wageHourly" type="number" inputmode="decimal" min="0" class="input-field" placeholder="0" />
         </div>
         <p class="text-xs text-muted-foreground">单价会更新到该成员绑定的工人档案，记工时自动带出。不填按 0 处理。</p>
-        <button class="btn-brand w-full min-h-11" :disabled="saving" @click="saveWage">保存单价</button>
+        <div class="flex gap-2 pt-1">
+          <button class="btn-ghost flex-1 min-h-11" @click="wageOpen = false">取消</button>
+          <button class="btn-brand flex-1 min-h-11" :disabled="saving" @click="saveWage">保存单价</button>
+        </div>
       </div>
     </Modal>
 

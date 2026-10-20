@@ -186,33 +186,27 @@
       </div>
     </div>
 
-    <!-- Reset password modal -->
-    <transition enter-active-class="transition-opacity duration-200" enter-from-class="opacity-0" leave-active-class="transition-opacity duration-150" leave-to-class="opacity-0">
-      <div v-if="resetModalVisible" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/50 sm:backdrop-blur-sm" @click.self="resetModalVisible = false">
-        <div class="surface rounded-2xl shadow-2xl p-6 w-full max-w-md animate-scale-in">
-          <div class="flex items-center gap-3 mb-5">
-            <div class="w-11 h-11 rounded-xl bg-brand-50 dark:bg-brand-500/15 text-brand-600 dark:text-brand-300 flex items-center justify-center">
-              <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-            </div>
-            <div>
-              <h3 class="text-lg font-bold text-foreground">重置密码</h3>
-              <p class="text-sm text-muted-foreground">用户：{{ resetTarget?.username }}</p>
-            </div>
+    <!-- 重置密码弹窗：改用通用 Modal 组件（自带 X 关闭按钮、遮罩关闭与 sticky 标题栏）。
+         之前是页面内自建浮层，既没有 X，又未 Teleport，受页面动画的 transform 影响会偏移。 -->
+    <Modal v-model="resetModalVisible" title="重置密码">
+      <div class="space-y-4">
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 rounded-xl bg-brand-50 dark:bg-brand-500/15 text-brand-600 dark:text-brand-300 flex items-center justify-center shrink-0">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
           </div>
-          <div class="space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-foreground mb-1.5">新密码</label>
-              <input v-model="resetNewPassword" type="password" placeholder="请输入新密码" class="input-field" @keyup.enter="confirmResetPassword" />
-            </div>
-            <div v-if="resetMsg" class="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{{ resetMsg }}</div>
-            <div class="flex gap-3 pt-1">
-              <button @click="resetModalVisible = false" class="btn-ghost flex-1 min-h-11">取消</button>
-              <button @click="confirmResetPassword" :disabled="resetLoading" class="btn-brand flex-1 min-h-11">{{ resetLoading ? '重置中...' : '确认重置' }}</button>
-            </div>
-          </div>
+          <p class="text-sm text-muted-foreground">用户：{{ resetTarget?.username }}</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-foreground mb-1.5">新密码</label>
+          <input v-model="resetNewPassword" type="password" placeholder="请输入新密码" class="input-field" @keyup.enter="confirmResetPassword" />
+        </div>
+        <div v-if="resetMsg" class="text-sm text-destructive bg-destructive/10 px-3 py-2 rounded-lg">{{ resetMsg }}</div>
+        <div class="flex gap-3 pt-1">
+          <button @click="resetModalVisible = false" class="btn-ghost flex-1 min-h-11">取消</button>
+          <button @click="confirmResetPassword" :disabled="resetLoading" class="btn-brand flex-1 min-h-11">{{ resetLoading ? '重置中...' : '确认重置' }}</button>
         </div>
       </div>
-    </transition>
+    </Modal>
 
     <!-- 加入我的班组弹窗 -->
     <Modal v-model="joinModalVisible" title="加入我的班组">

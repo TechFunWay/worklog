@@ -134,7 +134,10 @@
           <input v-model="confirmNote" class="input-field" placeholder="如：9月工资已结清" />
         </div>
         <p class="text-xs text-muted-foreground">结算后相关记工与借支将锁定，可在结算单详情中撤销重结。</p>
-        <button class="btn-brand w-full" :disabled="saving" @click="doSettle">确认结算</button>
+        <div class="flex gap-2">
+          <button class="btn-ghost flex-1 min-h-11" @click="confirmOpen = false">取消</button>
+          <button class="btn-brand flex-1 min-h-11" :disabled="saving" @click="doSettle">确认结算</button>
+        </div>
       </div>
     </Modal>
 
@@ -152,7 +155,10 @@
             <input type="date" v-model="batchEnd" class="input-field" />
           </div>
         </div>
-        <button class="btn-brand w-full" :disabled="saving" @click="doBatch">开始结算</button>
+        <div class="flex gap-2">
+          <button class="btn-ghost flex-1 min-h-11" @click="batchOpen = false">取消</button>
+          <button class="btn-brand flex-1 min-h-11" :disabled="saving" @click="doBatch">开始结算</button>
+        </div>
       </div>
     </Modal>
 
