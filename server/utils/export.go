@@ -59,6 +59,15 @@ func WriteJSONFile(c *gin.Context, filename string, data interface{}) error {
 	return nil
 }
 
+// WriteBytes streams raw bytes as a downloadable attachment. It is the
+// binary counterpart of WriteCSV/WriteJSONFile, used by Excel (xlsx) and
+// image exports that are generated in memory.
+func WriteBytes(c *gin.Context, filename, contentType string, data []byte) {
+	c.Header("Content-Type", contentType)
+	c.Header("Content-Disposition", contentDisposition(filename))
+	c.Data(http.StatusOK, contentType, data)
+}
+
 // ExportFilename returns "name_YYYYMMDD_HHMMSS.ext" so repeated exports never
 // collide in the browser's download folder.
 func ExportFilename(name, ext string) string {

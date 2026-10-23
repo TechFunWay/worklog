@@ -18,6 +18,9 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	g.POST("/projects", createProject(db))
 	g.PUT("/projects/:id", updateProject(db))
 	g.DELETE("/projects/:id", deleteProject(db))
+	g.GET("/projects/:id/prices", projectPrices(db))
+	g.PUT("/projects/:id/prices", updateProjectPrices(db))
+	g.GET("/effective-price", effectivePrice(db))
 	g.GET("/piece-items", listPieceItems(db))
 	g.POST("/piece-items", createPieceItem(db))
 	g.PUT("/piece-items/:id", updatePieceItem(db))
@@ -52,6 +55,9 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	g.GET("/stats/range", statsRange(db))
 	g.GET("/stats/project", statsByProject(db))
 	g.GET("/attendance", statsAttendance(db))
+	g.GET("/attendance/range", statsAttendanceRange(db))
+	g.GET("/attendance/reconcile", statsReconcile(db))
+	g.GET("/attendance/grid", statsAttendanceGrid(db))
 
 	// 角色与班组
 	g.GET("/me", handleMe(db))
@@ -72,9 +78,19 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	g.GET("/export/records.csv", exportRecordsCSV(db))
 	g.GET("/export/monthly.csv", exportMonthlyCSV(db))
 	g.GET("/export/attendance.csv", exportAttendanceCSV(db))
+	g.GET("/export/reconcile.csv", exportReconcileCSV(db))
+	g.GET("/export/attendance.xlsx", exportAttendanceXLSX(db))
 	g.GET("/export/advances.csv", exportAdvancesCSV(db))
 	g.GET("/export/settlements.csv", exportSettlementsCSV(db))
 	g.GET("/export/json", exportJSON(db))
+
+	// 导出到 NAS 文件夹（Excel / 图片）与导出文件管理
+	g.POST("/attendance/save-xlsx", saveNasAttendanceXLSX(db))
+	g.POST("/attendance/save-image", saveNasAttendanceImage(db))
+	g.GET("/exports", nasExportList(db))
+	g.GET("/exports/info", nasExportInfo(db))
+	g.GET("/exports/download", nasExportDownload(db))
+	g.POST("/exports/remove", nasExportRemove(db))
 }
 
 // setupAdminRoutes 管理员路由（全库备份下载与恢复导入）。

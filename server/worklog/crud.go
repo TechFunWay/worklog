@@ -142,6 +142,11 @@ func deleteWorker(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "该工人已有记工或借支记录，不能删除，请改为归档")
 			return
 		}
+		// 工地单独单价不阻止删除工人，直接一并清掉。
+		if err := db.Where("user_id = ? AND worker_id = ?", uid, item.ID).Delete(&ProjectWorkerPrice{}).Error; err != nil {
+			response.ErrorInternal(c, "删除失败")
+			return
+		}
 		if err := db.Delete(&item).Error; err != nil {
 			response.ErrorInternal(c, "删除失败")
 			return
@@ -182,6 +187,10 @@ func createProject(db *gorm.DB) gin.HandlerFunc {
 		in.ID = 0
 		in.UserID = loadAccess(db, currentUID(c)).scopeUser()
 		in.Name = strings.TrimSpace(in.Name)
+		if in.DayPriceCents < 0 || in.HourPriceCents < 0 {
+			response.ErrorBadRequest(c, "工地单价不能为负数")
+			return
+		}
 		if in.Status == "" {
 			in.Status = "active"
 		}
@@ -213,6 +222,12 @@ func updateProject(db *gorm.DB) gin.HandlerFunc {
 		}
 		item.Name = strings.TrimSpace(in.Name)
 		item.Note = in.Note
+		if in.DayPriceCents < 0 || in.HourPriceCents < 0 {
+			response.ErrorBadRequest(c, "工地单价不能为负数")
+			return
+		}
+		item.DayPriceCents = in.DayPriceCents
+		item.HourPriceCents = in.HourPriceCents
 		if in.Status == "active" || in.Status == "archived" {
 			item.Status = in.Status
 		}
@@ -232,13 +247,19 @@ func deleteProject(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		uid = loadAccess(db, uid).scopeUser()
-		res := db.Where("user_id = ? AND id = ?", uid, c.Param("id")).Delete(&Project{})
-		if res.Error != nil {
-			response.ErrorInternal(c, "删除失败")
+		var item Project
+		if err := db.Where("user_id = ? AND id = ?", uid, c.Param("id")).First(&item).Error; err != nil {
+			notFound(c, "工地不存在")
 			return
 		}
-		if res.RowsAffected == 0 {
-			notFound(c, "工地不存在")
+		err := db.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("user_id = ? AND project_id = ?", uid, item.ID).Delete(&ProjectWorkerPrice{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&item).Error
+		})
+		if err != nil {
+			response.ErrorInternal(c, "删除失败")
 			return
 		}
 		response.Success(c, gin.H{"ok": true})
@@ -392,19 +413,23 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 	rec.ProjectID = nil
 	rec.PieceItemID = nil
 
+	// 工地提前校验：休息记录也要带工地（按工地看考勤依赖它），
+	// 同时工地也是「工地单价」的来源，价格解析要用到。
+	var project *Project
+	if in.ProjectID != nil && *in.ProjectID > 0 {
+		var p Project
+		if err := db.Where("user_id = ? AND id = ?", uid, *in.ProjectID).First(&p).Error; err != nil {
+			return fmt.Errorf("工地不存在")
+		}
+		project = &p
+		rec.ProjectID = in.ProjectID
+	}
+
 	// 休息：不计钱
 	if in.Type == TypeRest {
 		rec.Quantity = "0"
 		rec.UnitPriceCents = 0
 		rec.AmountCents = 0
-		if in.ProjectID != nil && *in.ProjectID > 0 {
-			var n int64
-			db.Model(&Project{}).Where("user_id = ? AND id = ?", uid, *in.ProjectID).Count(&n)
-			if n == 0 {
-				return fmt.Errorf("工地不存在")
-			}
-			rec.ProjectID = in.ProjectID
-		}
 		return nil
 	}
 
@@ -434,23 +459,21 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 		}
 	}
 
-	// 单价：未传则带默认值（工人日薪/时薪或计件项目单价）。
-	// 月薪工（填了月薪）点工按当月实际天数折算日薪，缺勤不记工即自然扣款。
+	// 单价：手动传的最优先；未传则按「工地单独价 > 工地默认价 > 工人单价」
+	// 自动带出（点工月薪工按记工日期所在月天数折算，缺勤不记工即自然扣款），
+	// 计件仍按计件项目单价。工地单价规则见 project_prices.go。
 	price := int64(0)
 	if in.UnitPriceCents != nil {
 		price = *in.UnitPriceCents
+	} else if in.Type == TypePiece {
+		price = pieceItem.UnitPriceCents
 	} else {
+		rates := effectiveRates(db, uid, worker, project, in.Date)
 		switch in.Type {
 		case TypeDay:
-			if worker.MonthlyWageCents > 0 {
-				price = dailyFromMonthly(worker.MonthlyWageCents, in.Date)
-			} else {
-				price = worker.DailyWageCents
-			}
+			price = rates.Daily
 		case TypeHour:
-			price = worker.HourlyWageCents
-		case TypePiece:
-			price = pieceItem.UnitPriceCents
+			price = rates.Hourly
 		}
 	}
 	if price <= 0 {
@@ -461,14 +484,6 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 	rec.UnitPriceCents = price
 	rec.AmountCents = computeAmountCents(q, price)
 
-	if in.ProjectID != nil && *in.ProjectID > 0 {
-		var n int64
-		db.Model(&Project{}).Where("user_id = ? AND id = ?", uid, *in.ProjectID).Count(&n)
-		if n == 0 {
-			return fmt.Errorf("工地不存在")
-		}
-		rec.ProjectID = in.ProjectID
-	}
 	if in.Type == TypePiece {
 		rec.PieceItemID = in.PieceItemID
 	}
@@ -496,10 +511,18 @@ func recordsByDate(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "日期格式应为 YYYY-MM-DD")
 			return
 		}
-		// 当日出过工的已归档工人也要展示出来
+		// 工地上下文（记工页切换器）：不传=全部；none=未分工地；数字=指定工地。
+		pf, ok := parseProjectFilter(c)
+		if !ok {
+			response.ErrorBadRequest(c, "project_id 参数不正确")
+			return
+		}
+		// 当日出过工的已归档工人也要展示出来（按当前工地过滤后的记录）。
 		var touchedIDs []uint
-		db.Model(&WorkRecord{}).Select("DISTINCT worker_id").
-			Where("user_id = ? AND date = ?", dsUID, date).Scan(&touchedIDs)
+		tq := db.Model(&WorkRecord{}).Select("DISTINCT worker_id").
+			Where("user_id = ? AND date = ?", dsUID, date)
+		tq = pf.apply(tq)
+		tq.Scan(&touchedIDs)
 
 		workerQ := db.Where("user_id = ? AND (status = ? OR id IN ?)", dsUID, "active", touchedIDs)
 		if sw, ok := ac.workerScope(); ok {
@@ -511,7 +534,9 @@ func recordsByDate(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var records []WorkRecord
-		db.Where("user_id = ? AND date = ?", dsUID, date).Order("created_at ASC").Find(&records)
+		rq := db.Where("user_id = ? AND date = ?", dsUID, date)
+		rq = pf.apply(rq)
+		rq.Order("created_at ASC").Find(&records)
 		fillRecordNames(db, records)
 
 		byWorker := map[uint][]WorkRecord{}
@@ -543,7 +568,7 @@ func recordsByDate(db *gorm.DB) gin.HandlerFunc {
 			row.Pieces = trimFloat(pieces)
 			rows = append(rows, row)
 		}
-		response.Success(c, gin.H{"date": date, "workers": rows})
+		response.Success(c, gin.H{"date": date, "project_id": pf.echoID(), "workers": rows})
 	}
 }
 

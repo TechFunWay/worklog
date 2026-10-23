@@ -24,15 +24,32 @@ type Worker struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// Project 工地/项目（选填维度）。
+// Project 工地/项目（选填维度）。DayPriceCents/HourPriceCents 是工地默认单价
+// （0=未设置，记工时回落到工人自身单价）；「某工人某工地单独定价」见
+// ProjectWorkerPrice，优先级高于工地默认单价。
 type Project struct {
-	ID        uint      `gorm:"primarykey" json:"id"`
-	UserID    uint      `gorm:"index;not null" json:"-"`
-	Name      string    `gorm:"not null" json:"name"`
-	Note      string    `json:"note"`
-	Status    string    `gorm:"default:active;index" json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID             uint      `gorm:"primarykey" json:"id"`
+	UserID         uint      `gorm:"index;not null" json:"-"`
+	Name           string    `gorm:"not null" json:"name"`
+	Note           string    `json:"note"`
+	Status         string    `gorm:"default:active;index" json:"status"`
+	DayPriceCents  int64     `json:"day_price_cents"`  // 工地默认日工单价（分/个工）
+	HourPriceCents int64     `json:"hour_price_cents"` // 工地默认小时单价（分/小时）
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// ProjectWorkerPrice 工人在某工地的单独定价：覆盖工地默认单价与工人自身单价。
+// 同一 (project_id, worker_id) 只有一行；两个单价都为 0 时该行删除（视为无覆盖）。
+type ProjectWorkerPrice struct {
+	ID              uint      `gorm:"primarykey" json:"id"`
+	UserID          uint      `gorm:"index;not null" json:"-"`
+	ProjectID       uint      `gorm:"not null;uniqueIndex:idx_project_worker" json:"project_id"`
+	WorkerID        uint      `gorm:"not null;uniqueIndex:idx_project_worker" json:"worker_id"`
+	DailyWageCents  int64     `json:"daily_wage_cents"`
+	HourlyWageCents int64     `json:"hourly_wage_cents"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // PieceItem 计件项目：名称 + 计量单位 + 默认单价。
@@ -111,7 +128,7 @@ type Settlement struct {
 }
 
 func init() {
-	database.RegisterModels(&Worker{}, &Project{}, &PieceItem{}, &WorkRecord{}, &Advance{}, &Settlement{})
+	database.RegisterModels(&Worker{}, &Project{}, &ProjectWorkerPrice{}, &PieceItem{}, &WorkRecord{}, &Advance{}, &Settlement{})
 	database.RegisterUserDeleteGuard(hasWorklogData)
 	database.RegisterUserDeleteCleanup(cleanupWorklogUserData)
 
@@ -154,7 +171,7 @@ func hasWorklogData(db *gorm.DB, userID uint) (bool, error) {
 }
 
 func cleanupWorklogUserData(db *gorm.DB, userID uint) error {
-	for _, model := range []interface{}{&WorkRecord{}, &Advance{}, &Settlement{}, &Worker{}, &Project{}, &PieceItem{}} {
+	for _, model := range []interface{}{&WorkRecord{}, &Advance{}, &Settlement{}, &Worker{}, &Project{}, &ProjectWorkerPrice{}, &PieceItem{}} {
 		if err := db.Where("user_id = ?", userID).Delete(model).Error; err != nil {
 			return err
 		}

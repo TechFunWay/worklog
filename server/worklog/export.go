@@ -50,10 +50,7 @@ func exportRecordsCSV(db *gorm.DB) gin.HandlerFunc {
 }
 
 func pieceLabel(r WorkRecord) string {
-	if r.PieceName == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s(%s)", r.PieceName, r.PieceUnit)
+	return pieceLabelFromName(r.PieceName, r.PieceUnit)
 }
 
 func exportMonthlyCSV(db *gorm.DB) gin.HandlerFunc {
@@ -82,22 +79,56 @@ func exportMonthlyCSV(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// exportAttendanceCSV 导出某月「考勤表」：按工人逐日列出点工/点时/计件/休息
-// 与当天工资，每人末尾带一行合计。不传 worker_id 时导出全部在职工人（含当月
+// exportAttendanceCSV 导出「考勤表」：按工人逐日列出点工/点时/计件/休息
+// 与当天工资，每人末尾带一行合计。支持两种时间维度：
+//   - year+month（默认当前月）：月度考勤表；
+//   - start+end：自定义时间段考勤表（粉丝反馈要按不同时间段查考勤）。
+//
+// 另支持 project_id 按工地过滤。不传 worker_id 时导出全部在职工人（含期间内
 // 有记录的已归档工人），传 worker_id 时只导出该工人；员工角色强制只导出自己。
 func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := currentUID(c)
 		ac := loadAccess(db, uid)
 		dsUID := ac.scopeUser()
-		now := time.Now()
-		year := atoiDefault(c.Query("year"), now.Year())
-		month := atoiDefault(c.Query("month"), int(now.Month()))
-		if month < 1 || month > 12 {
-			response.ErrorBadRequest(c, "月份不正确")
+
+		// 时间维度：优先 start/end（两者都合法），否则按 year/month。
+		start, end := c.Query("start"), c.Query("end")
+		var name string
+		rangeMode := validDate(start) && validDate(end)
+		if rangeMode {
+			st, err1 := time.Parse("2006-01-02", start)
+			et, err2 := time.Parse("2006-01-02", end)
+			if err1 != nil || err2 != nil || st.After(et) {
+				response.ErrorBadRequest(c, "时间段不正确：请提供 start/end（YYYY-MM-DD）且起止顺序正确")
+				return
+			}
+			if int(et.Sub(st).Hours()/24)+1 > maxAttendanceRangeDays {
+				response.ErrorBadRequest(c, "查询时间段不能超过 731 天")
+				return
+			}
+			name = fmt.Sprintf("考勤表-%s至%s", start, end)
+		} else {
+			if start != "" || end != "" {
+				response.ErrorBadRequest(c, "时间段不正确：请同时提供 start/end（YYYY-MM-DD）")
+				return
+			}
+			now := time.Now()
+			year := atoiDefault(c.Query("year"), now.Year())
+			month := atoiDefault(c.Query("month"), int(now.Month()))
+			if month < 1 || month > 12 {
+				response.ErrorBadRequest(c, "月份不正确")
+				return
+			}
+			start, end = monthRange(year, month)
+			name = fmt.Sprintf("考勤表-%d-%02d", year, month)
+		}
+
+		pf, ok := parseProjectFilter(c)
+		if !ok {
+			response.ErrorBadRequest(c, "project_id 参数不正确")
 			return
 		}
-		start, end := monthRange(year, month)
 
 		workerID := utils.Atoi(c.Query("worker_id"), 0)
 		if sw, ok := ac.workerScope(); ok {
@@ -128,6 +159,7 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 
 		var records []WorkRecord
 		q := db.Where("user_id = ? AND date BETWEEN ? AND ?", dsUID, start, end)
+		q = pf.apply(q)
 		if workerID > 0 {
 			q = q.Where("worker_id = ?", workerID)
 		}
@@ -237,8 +269,91 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 				centsToYuanString(totalAmount), "",
 			})
 		}
-		writeCSV(c, utils.ExportFilename(fmt.Sprintf("考勤表-%d-%02d", year, month), "csv"), rows)
+		writeCSV(c, utils.ExportFilename(name, "csv"), rows)
 	}
+}
+
+// exportReconcileCSV 导出「对工单」：一段人类可读的表头信息（工人/期间/工地）+
+// 逐条记工明细 + 合计，方便组长直接转发给工人核对。数据与
+// GET /worklog/attendance/reconcile 同源（buildReconcile），两处数字不会不一致。
+func exportReconcileCSV(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		uid := currentUID(c)
+		ac := loadAccess(db, uid)
+		dsUID := ac.scopeUser()
+
+		start, end, ok := parseDateRange(c)
+		if !ok {
+			response.ErrorBadRequest(c, "时间段不正确：请提供 start/end（YYYY-MM-DD），起止顺序正确且不超过 731 天")
+			return
+		}
+		pf, ok := parseProjectFilter(c)
+		if !ok {
+			response.ErrorBadRequest(c, "project_id 参数不正确")
+			return
+		}
+		workerID := utils.Atoi(c.Query("worker_id"), 0)
+		if sw, ok := ac.workerScope(); ok {
+			if ac.workerUnbound() {
+				forbidden(c)
+				return
+			}
+			workerID = int(sw)
+		}
+		if workerID <= 0 {
+			response.ErrorBadRequest(c, "请选择要核对的工人")
+			return
+		}
+		res, err := buildReconcile(db, dsUID, uint(workerID), start, end, pf)
+		if err == errWorkerNotFound {
+			response.ErrorBadRequest(c, "工人不存在")
+			return
+		}
+		if err == errProjectNotFound {
+			response.ErrorBadRequest(c, "工地不存在")
+			return
+		}
+		if err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+
+		rows := [][]string{
+			{"对工单"},
+			{"工人", res.Worker.Name},
+			{"期间", res.Start + " 至 " + res.End},
+			{"工地", res.ProjectName},
+			{},
+			{"日期", "类型", "数量", "单价(元)", "金额(元)", "工地", "计件项目", "备注"},
+		}
+		for _, it := range res.Items {
+			quantity := it.Quantity
+			if it.Rest {
+				quantity = ""
+			}
+			piece := pieceLabelFromName(it.PieceName, it.PieceUnit)
+			rows = append(rows, []string{
+				it.Date, it.TypeLabel, quantity,
+				centsToYuanString(it.UnitPriceCents), centsToYuanString(it.AmountCents),
+				it.ProjectName, piece, it.Note,
+			})
+		}
+		summary := fmt.Sprintf("点工 %s 天；计时 %s 小时；计件 %s；休息 %d 天",
+			trimFloat(res.Days), trimFloat(res.Hours), trimFloat(res.Pieces), res.RestCount)
+		rows = append(rows, []string{"合计", "", summary, "", centsToYuanString(res.AmountCents), "", "", ""})
+		writeCSV(c, utils.ExportFilename(fmt.Sprintf("对工单-%s-%s至%s", res.Worker.Name, start, end), "csv"), rows)
+	}
+}
+
+// pieceLabelFromName 计件项目展示：名称 + 单位（无单位时只显示名称）。
+func pieceLabelFromName(name, unit string) string {
+	if name == "" {
+		return ""
+	}
+	if unit == "" {
+		return name
+	}
+	return fmt.Sprintf("%s(%s)", name, unit)
 }
 
 func exportAdvancesCSV(db *gorm.DB) gin.HandlerFunc {
@@ -288,22 +403,25 @@ func exportJSON(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := currentUID(c)
 		var workers, projects, pieces []interface{}
+		var projectPrices []ProjectWorkerPrice
 		var records, advances, settlements []interface{}
 		db.Where("user_id = ?", uid).Find(&workers)
 		db.Where("user_id = ?", uid).Find(&projects)
 		db.Where("user_id = ?", uid).Find(&pieces)
+		db.Where("user_id = ?", uid).Find(&projectPrices)
 		db.Where("user_id = ?", uid).Find(&records)
 		db.Where("user_id = ?", uid).Find(&advances)
 		db.Where("user_id = ?", uid).Find(&settlements)
 		data := gin.H{
-			"app":         "worklog",
-			"exported_at": time.Now().Format(time.RFC3339),
-			"workers":     workers,
-			"projects":    projects,
-			"piece_items": pieces,
-			"records":     records,
-			"advances":    advances,
-			"settlements": settlements,
+			"app":            "worklog",
+			"exported_at":    time.Now().Format(time.RFC3339),
+			"workers":        workers,
+			"projects":       projects,
+			"project_prices": projectPrices,
+			"piece_items":    pieces,
+			"records":        records,
+			"advances":       advances,
+			"settlements":    settlements,
 		}
 		if err := utils.WriteJSONFile(c, utils.ExportFilename("工记数据备份", "json"), data); err != nil {
 			response.ErrorInternal(c, "导出失败")
