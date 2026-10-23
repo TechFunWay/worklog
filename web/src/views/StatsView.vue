@@ -219,8 +219,8 @@ async function exportCsv(path: string, params: Record<string, unknown>) {
   if (exporting.value) return
   exporting.value = true
   try {
-    await downloadExport(path, params)
-    toast('已开始下载')
+    const filename = await downloadExport(path, params)
+    toast(`已导出：${filename}，文件在浏览器「下载」文件夹`)
   } catch (e: any) {
     toast(e.response?.data?.message || '导出失败，请稍后重试', 'error')
   } finally {

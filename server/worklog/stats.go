@@ -280,6 +280,7 @@ type attendanceCell struct {
 }
 
 // statsAttendance 考勤表：某工人某月的每日出勤汇总 + 月度合计。
+// 支持 ?project_id= 按工地过滤（none=未分工地），切换工地即可看该工地的考勤。
 func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := currentUID(c)
@@ -290,6 +291,11 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 		month := atoiDefault(c.Query("month"), int(now.Month()))
 		if month < 1 || month > 12 {
 			response.ErrorBadRequest(c, "月份不正确")
+			return
+		}
+		pf, ok := parseProjectFilter(c)
+		if !ok {
+			response.ErrorBadRequest(c, "project_id 参数不正确")
 			return
 		}
 		start, end := monthRange(year, month)
@@ -309,7 +315,7 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 			var w Worker
 			q := db.Where("user_id = ? AND status = ?", dsUID, "active")
 			if err := q.Order("name ASC").First(&w).Error; err != nil {
-				response.Success(c, gin.H{"worker": nil, "cells": []attendanceCell{}, "days": 0, "hours": 0, "pieces": 0, "rest_count": 0, "amount_cents": 0})
+				response.Success(c, gin.H{"worker": nil, "cells": []attendanceCell{}, "days": 0, "hours": 0, "pieces": 0, "rest_count": 0, "amount_cents": 0, "project_id": pf.echoID()})
 				return
 			}
 			workerID = int(w.ID)
@@ -321,8 +327,9 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var records []WorkRecord
-		if err := db.Where("user_id = ? AND worker_id = ? AND date BETWEEN ? AND ?", dsUID, workerID, start, end).
-			Order("date ASC, id ASC").Find(&records).Error; err != nil {
+		q := db.Where("user_id = ? AND worker_id = ? AND date BETWEEN ? AND ?", dsUID, workerID, start, end)
+		q = pf.apply(q)
+		if err := q.Order("date ASC, id ASC").Find(&records).Error; err != nil {
 			response.ErrorInternal(c, "查询失败")
 			return
 		}
@@ -375,6 +382,7 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 			"worker":       worker,
 			"year":         year,
 			"month":        month,
+			"project_id":   pf.echoID(),
 			"days":         totalDays,
 			"hours":        totalHours,
 			"pieces":       totalPieces,

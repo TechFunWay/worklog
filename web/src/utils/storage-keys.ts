@@ -10,4 +10,7 @@ export const SK = {
   // 安全提示的「稍后再说」时间戳：也必须是带前缀的键——网关域下与兄弟应用
   // 共享 localStorage，裸键会互相覆盖。
   securityPromptDismissed: `${P}security_prompt_dismissed_at`,
+  // 上次使用的工地上下文：考勤表默认筛选、记工页默认工地都读它。
+  // 值为正整数（工地 id）或 'none'（未分工地）；不存在表示「全部工地」。
+  lastProjectId: `${P}last_project_id`,
 } as const

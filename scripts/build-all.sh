@@ -71,7 +71,7 @@ for PLATFORM in "${PLATFORMS[@]}"; do
       -e "LDFLAGS=${LDFLAGS}" \
       -e "GOARCH=${GOARCH}" \
       golang:1.26-alpine \
-      sh -c 'for i in 1 2 3; do apk add --no-cache gcc musl-dev && break; echo "apk retry $i"; sleep 5; done && CGO_ENABLED=1 go build -ldflags "$LDFLAGS -extldflags -static" -o worklog-linux-${GOARCH} .'
+      sh -c 'sed -i "s#https://dl-cdn.alpinelinux.org#https://mirrors.aliyun.com#" /etc/apk/repositories && for i in 1 2 3; do apk add --no-cache gcc musl-dev && break; echo "apk retry $i"; sleep 5; done && CGO_ENABLED=1 go build -ldflags "$LDFLAGS -extldflags -static" -o worklog-linux-${GOARCH} .'
     mv "server/worklog-linux-${GOARCH}" "server/${OUTPUT_NAME}"
   elif [ "$GOOS" = "windows" ]; then
     (cd server && \
