@@ -15,6 +15,18 @@ export function fmtMoney(cents: number | undefined | null): string {
   return '¥' + fmtYuan(cents)
 }
 
+// 统计卡用的紧凑金额：整元省略「.00」，避免 375 宽四列卡里数字撑破卡片。
+export function fmtYuanShort(cents: number | undefined | null): string {
+  const n = Math.round(cents ?? 0)
+  const neg = n < 0
+  const abs = Math.abs(n)
+  const yuan = Math.floor(abs / 100)
+  const fen = abs % 100
+  const intStr = String(yuan).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+  const s = fen === 0 ? intStr : `${intStr}.${String(fen).padStart(2, '0')}`
+  return (neg ? '-' : '') + s
+}
+
 // 用户输入的元金额 → 分（返回 null 表示无效）
 export function yuanToCents(input: string): number | null {
   const s = input.trim().replace(/[¥,，\s]/g, '')
@@ -25,6 +37,14 @@ export function yuanToCents(input: string): number | null {
 export function centsToYuanInput(cents: number | undefined | null): string {
   if (cents === undefined || cents === null || cents === 0) return ''
   return (cents / 100).toFixed(2)
+}
+
+// 数量格式化：接口里的天数/小时/件数可能是 12.50 这类字符串，展示时去掉多余的 0，
+// 最多保留两位小数（点工 0.5 天、计时 0.25 小时都要原样显示）。
+export function fmtQty(value: number | string | undefined | null): string {
+  const n = typeof value === 'string' ? parseFloat(value) : value
+  if (n === undefined || n === null || !isFinite(n)) return '0'
+  return String(+n.toFixed(2))
 }
 
 export const TYPE_LABELS: Record<string, string> = { day: '点工', hour: '点时', piece: '计件' }
