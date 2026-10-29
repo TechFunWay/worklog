@@ -5,7 +5,7 @@
         <!-- 遮罩层铺满整个视口，根节点的 @click.self 永远不会触发，
              所以关闭必须由遮罩自己处理，否则「点暗处关闭」形同虚设。 -->
         <div class="absolute inset-0 bg-black bg-opacity-50" @click="handleCancel"></div>
-        <div class="relative bg-surface text-foreground shadow-xl w-full sm:max-w-sm sm:mx-4 rounded-t-2xl sm:rounded-2xl px-5 pt-4 pb-[calc(20px+env(safe-area-inset-bottom))] sm:p-6">
+        <div class="relative bg-surface text-foreground shadow-xl w-full sm:max-w-sm sm:mx-4 rounded-t-2xl sm:rounded-2xl px-5 pt-4 pb-[calc(20px_+_var(--app-bottom-inset))] sm:p-6">
           <div class="sm:hidden mx-auto mb-3 h-1 w-10 rounded-full bg-muted-foreground/30" aria-hidden="true"></div>
           <!-- 标题栏：与 Modal.vue 保持一致，右上角固定 X 关闭按钮（触控区 44px） -->
           <div class="flex items-start justify-between gap-3 mb-1.5 sm:mb-2">

@@ -17,6 +17,34 @@
       @save="handleSave"
     />
 
+    <!-- 底部预留（本机设置，存 localStorage，不进服务端配置）：
+         飞牛手机 App / 安卓浏览器的系统导航条会压住底部菜单（issue IKNAOC），
+         自动档在安卓上默认抬高 48px；不同 ROM 导航条高度不同，可在此手动调 -->
+    <div class="surface rounded-2xl p-4 sm:p-6">
+      <div class="flex items-start gap-3">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-500/15 text-brand-600 dark:text-brand-300">
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 11.5L12 16l5-4.5M12 4v12M5 20h14"/></svg>
+        </div>
+        <div class="min-w-0 flex-1">
+          <h3 class="text-sm font-bold text-foreground">底部预留（手机）</h3>
+          <p class="mt-1 text-sm leading-relaxed text-muted-foreground">
+            手机上底部菜单与系统按钮（返回键、导航条）重叠时，在这里抬高底部留白。
+            仅影响本机，换设备后重新设置即可。当前实际预留 {{ insetPx }} 像素。
+          </p>
+          <div class="mt-3 flex flex-wrap gap-1.5">
+            <button
+              v-for="p in INSET_PRESETS"
+              :key="String(p.value)"
+              type="button"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors"
+              :class="insetMode === p.value ? 'bg-brand-gradient text-white border-transparent shadow-glow' : 'text-muted-foreground border-border hover:bg-muted'"
+              @click="chooseInset(p.value)"
+            >{{ p.label }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 支持作者（班组长/管理员可见，工人登录不显示，赞赏完全自愿） -->
     <div v-if="!worklogStore.isWorker && (worklogStore.isBoss || authStore.isAdmin)" class="surface rounded-2xl p-4 sm:p-6">
       <div class="flex flex-wrap items-center justify-between gap-4">
@@ -54,10 +82,21 @@ import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
 import { useWorklogStore } from '../stores/worklog'
 import { useSupportStore } from '../stores/support'
+import { INSET_PRESETS, readInsetMode, resolveInsetPx, setBottomInset } from '../utils/bottom-inset'
+import type { InsetMode } from '../utils/bottom-inset'
 
 const authStore = useAuthStore()
 const worklogStore = useWorklogStore()
 const supportStore = useSupportStore()
+
+// 底部预留档位（本机设置，见 utils/bottom-inset.ts）
+const insetMode = ref<InsetMode>(readInsetMode())
+const insetPx = ref(resolveInsetPx(insetMode.value))
+function chooseInset(v: InsetMode) {
+  insetMode.value = v
+  setBottomInset(v)
+  insetPx.value = resolveInsetPx(v)
+}
 const items = ref<ConfigMeta[]>([])
 const loading = ref(false)
 const errorMsg = ref('')

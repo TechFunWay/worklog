@@ -5,7 +5,7 @@
         <div class="absolute inset-0 bg-black bg-opacity-50" @click="handleClose"></div>
         <!-- Mobile: bottom sheet docked above the keyboard; desktop: centered dialog -->
         <div
-          class="relative bg-surface text-foreground shadow-xl w-full sm:max-w-lg sm:mx-4 rounded-t-2xl sm:rounded-2xl overflow-y-auto px-5 pb-[calc(20px+env(safe-area-inset-bottom))] sm:px-6 sm:pb-6 max-h-[92dvh]"
+          class="relative bg-surface text-foreground shadow-xl w-full sm:max-w-lg sm:mx-4 rounded-t-2xl sm:rounded-2xl overflow-y-auto px-5 pb-[calc(20px_+_var(--app-bottom-inset))] sm:px-6 sm:pb-6 max-h-[92dvh]"
           :style="sheetStyle"
         >
           <!-- 标题栏 sticky：长表单滚动时右上角关闭按钮始终可见可点。
