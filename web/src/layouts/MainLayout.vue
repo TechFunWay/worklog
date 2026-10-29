@@ -112,7 +112,7 @@
 
     <!-- Main column -->
     <div class="flex-1 flex flex-col min-h-dvh min-w-0 lg:pl-72">
-      <header class="sticky top-0 z-20 px-3 sm:px-4 lg:px-8 pt-2 sm:pt-3">
+      <header class="app-header sticky top-0 z-20 px-3 sm:px-4 lg:px-8 pt-2 sm:pt-3">
         <div class="h-12 sm:h-16 flex items-center justify-between px-3 sm:px-6 rounded-2xl surface">
           <div class="flex items-center gap-2 sm:gap-3 min-w-0">
             <button class="lg:hidden -ml-1 inline-flex shrink-0 items-center justify-center min-w-11 min-h-11 rounded-lg text-foreground hover:bg-muted" aria-label="打开菜单" @click="sidebarOpen = !sidebarOpen">
@@ -163,7 +163,7 @@
         </div>
       </header>
 
-      <main class="flex-1 min-w-0 p-3 sm:p-6 xl:p-8 overflow-auto pb-[calc(72px+env(safe-area-inset-bottom))] lg:pb-8">
+      <main class="flex-1 min-w-0 p-3 sm:p-6 xl:p-8 overflow-auto pb-[calc(72px_+_var(--app-bottom-inset))] lg:pb-8">
         <!-- 赞赏横幅：班组长（老板）与系统管理员可见，工人登录不显示；
              关闭不持久化，刷新后再次出现；支持过当前版本后隐藏，
              应用升级到新版本后再次出现 -->
@@ -189,7 +189,7 @@
     <!-- Mobile bottom nav -->
     <nav
       class="mobile-bottom-nav fixed inset-x-0 bottom-0 z-40 lg:hidden grid grid-cols-5 border-t border-border"
-      style="padding-bottom: env(safe-area-inset-bottom)"
+      :style="{ paddingBottom: 'var(--app-bottom-inset)' }"
     >
       <RouterLink
         v-for="item in mobileNav"
@@ -438,6 +438,15 @@ onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
 </script>
 
 <style scoped>
+/* 手机端吸顶头去重影（issue IKNAOC 截图顶部）：surface 是 90% 半透明，
+   页面大标题滚动到头部后面时会透出来形成重影。手机端改成完全不透明。 */
+@media (max-width: 767px) {
+  .app-header > .surface,
+  .dark .app-header > .surface {
+    background-color: rgb(var(--color-surface));
+  }
+}
+
 /* 手机端毛玻璃是掉帧大户：底栏固定在屏幕上，滚动时每帧都要对下层重新采样，
    键盘弹出时又跟着视口重排。手机端改用近不透明底色，观感几乎无差。 */
 .mobile-bottom-nav {

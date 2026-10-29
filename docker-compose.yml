@@ -14,7 +14,7 @@
 #   数据（SQLite/上传文件/日志/配置）持久化在 named volume 中，升级不丢数据。
 services:
   techfunway-worklog:
-    image: techfunways/worklog:v0.4.0
+    image: techfunways/worklog:v0.4.1
     container_name: techfunway-worklog
     ports:
       - "8909:8909"
