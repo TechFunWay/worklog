@@ -19,6 +19,12 @@
  */
 
 :root {
+  /* 底部避让高度（Gitee issue IKNAOC）：默认取 iOS 安全区。安卓 WebView 的
+     env(safe-area-inset-bottom) 恒为 0，挡不住系统三键导航条，启动时由
+     utils/bottom-inset.ts 按设备量算并覆盖成 px 值（偏好设置页可手动调档）。
+     底部导航、main 底部内边距、贴底弹窗全部读这一个变量。 */
+  --app-bottom-inset: env(safe-area-inset-bottom);
+
   /* Brand — 工记琥珀橙（工地安全帽意象） */
   --color-brand-50:  255 247 237;
   --color-brand-100: 255 237 213;

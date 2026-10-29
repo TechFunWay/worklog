@@ -3,6 +3,12 @@ import { createPinia } from 'pinia'
 import router from './router'
 import App from './App.vue'
 import './style.css'
+import { watchBottomInset } from './utils/bottom-inset'
+
+// 底部避让：安卓 WebView 不把系统导航条算进 env(safe-area-inset-bottom)，
+// 飞牛手机 App 里底部菜单会被系统按钮压住（issue IKNAOC）。
+// 启动时量算并写入 --app-bottom-inset，旋转/视口变化后重新量。
+watchBottomInset()
 
 // 换号弹窗的回跳落点：register?fnos_switch_close=1。在应用挂载前通知打开者
 // 「飞牛账号已切换完成」并自关，不在弹窗里渲染完整应用。window.close() 在
