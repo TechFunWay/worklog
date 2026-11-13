@@ -16,9 +16,12 @@ import (
 
 func exportRecordsCSV(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := currentUID(c)
-		q := db.Where("user_id = ?", uid)
-		if v := c.Query("worker_id"); v != "" {
+		ac := loadAccess(db, currentUID(c))
+		uid := ac.scopeUser()
+		q := db.Where("user_id = ? AND status = ?", uid, RecordStatusApproved)
+		if sw, ok := ac.workerScope(); ok {
+			q = q.Where("worker_id = ?", sw)
+		} else if v := c.Query("worker_id"); v != "" {
 			q = q.Where("worker_id = ?", v)
 		}
 		if v := c.Query("start"); validDate(v) {
@@ -55,14 +58,18 @@ func pieceLabel(r WorkRecord) string {
 
 func exportMonthlyCSV(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := currentUID(c)
+		ac := loadAccess(db, currentUID(c))
+		uid := ac.scopeUser()
 		now := time.Now()
 		year := atoiDefault(c.Query("year"), now.Year())
 		month := atoiDefault(c.Query("month"), int(now.Month()))
 		start, end := monthRange(year, month)
+		q := db.Where("user_id = ? AND date BETWEEN ? AND ? AND status = ?", uid, start, end, RecordStatusApproved)
+		if sw, ok := ac.workerScope(); ok {
+			q = q.Where("worker_id = ?", sw)
+		}
 		var records []WorkRecord
-		if err := db.Where("user_id = ? AND date BETWEEN ? AND ?", uid, start, end).
-			Order("worker_id ASC, date ASC").Find(&records).Error; err != nil {
+		if err := q.Order("worker_id ASC, date ASC").Find(&records).Error; err != nil {
 			response.ErrorInternal(c, "导出失败")
 			return
 		}
@@ -158,7 +165,7 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var records []WorkRecord
-		q := db.Where("user_id = ? AND date BETWEEN ? AND ?", dsUID, start, end)
+		q := db.Where("user_id = ? AND date BETWEEN ? AND ? AND status = ?", dsUID, start, end, RecordStatusApproved)
 		q = pf.apply(q)
 		if workerID > 0 {
 			q = q.Where("worker_id = ?", workerID)
@@ -358,9 +365,14 @@ func pieceLabelFromName(name, unit string) string {
 
 func exportAdvancesCSV(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := currentUID(c)
+		ac := loadAccess(db, currentUID(c))
+		uid := ac.scopeUser()
+		q := db.Where("user_id = ?", uid)
+		if sw, ok := ac.workerScope(); ok {
+			q = q.Where("worker_id = ?", sw)
+		}
 		var items []Advance
-		if err := db.Where("user_id = ?", uid).Order("date ASC, id ASC").Find(&items).Error; err != nil {
+		if err := q.Order("date ASC, id ASC").Find(&items).Error; err != nil {
 			response.ErrorInternal(c, "导出失败")
 			return
 		}
@@ -379,9 +391,14 @@ func exportAdvancesCSV(db *gorm.DB) gin.HandlerFunc {
 
 func exportSettlementsCSV(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := currentUID(c)
+		ac := loadAccess(db, currentUID(c))
+		uid := ac.scopeUser()
+		q := db.Where("user_id = ?", uid)
+		if sw, ok := ac.workerScope(); ok {
+			q = q.Where("worker_id = ?", sw)
+		}
 		var items []Settlement
-		if err := db.Where("user_id = ?", uid).Order("settled_at ASC, id ASC").Limit(20000).Find(&items).Error; err != nil {
+		if err := q.Order("settled_at ASC, id ASC").Limit(20000).Find(&items).Error; err != nil {
 			response.ErrorInternal(c, "导出失败")
 			return
 		}
@@ -401,17 +418,66 @@ func exportSettlementsCSV(db *gorm.DB) gin.HandlerFunc {
 // exportJSON 导出当前用户全部业务数据（JSON 包）。
 func exportJSON(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		uid := currentUID(c)
-		var workers, projects, pieces []interface{}
+		ac := loadAccess(db, currentUID(c))
+		uid := ac.scopeUser()
+		sw, isWorker := ac.workerScope()
+		var workers []Worker
+		var projects []Project
+		var pieces []PieceItem
 		var projectPrices []ProjectWorkerPrice
-		var records, advances, settlements []interface{}
-		db.Where("user_id = ?", uid).Find(&workers)
-		db.Where("user_id = ?", uid).Find(&projects)
-		db.Where("user_id = ?", uid).Find(&pieces)
-		db.Where("user_id = ?", uid).Find(&projectPrices)
-		db.Where("user_id = ?", uid).Find(&records)
-		db.Where("user_id = ?", uid).Find(&advances)
-		db.Where("user_id = ?", uid).Find(&settlements)
+		var records []WorkRecord
+		var advances []Advance
+		var settlements []Settlement
+
+		wq := db.Where("user_id = ?", uid)
+		if isWorker {
+			wq = wq.Where("id = ?", sw)
+		}
+		if err := wq.Order("id ASC").Find(&workers).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+		if err := db.Where("user_id = ?", uid).Order("id ASC").Find(&projects).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+		if err := db.Where("user_id = ?", uid).Order("id ASC").Find(&pieces).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+		pq := db.Where("user_id = ?", uid)
+		if isWorker {
+			pq = pq.Where("worker_id = ?", sw)
+		}
+		if err := pq.Order("id ASC").Find(&projectPrices).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+		rq := db.Where("user_id = ?", uid)
+		if isWorker {
+			rq = rq.Where("worker_id = ?", sw)
+		}
+		if err := rq.Order("date ASC, id ASC").Find(&records).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+		// 借支与记工共用同一套工人过滤，但查询链单独建，避免 GORM 复用条件。
+		aq := db.Where("user_id = ?", uid)
+		if isWorker {
+			aq = aq.Where("worker_id = ?", sw)
+		}
+		if err := aq.Order("date ASC, id ASC").Find(&advances).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
+		sq := db.Where("user_id = ?", uid)
+		if isWorker {
+			sq = sq.Where("worker_id = ?", sw)
+		}
+		if err := sq.Order("settled_at ASC, id ASC").Find(&settlements).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
 		data := gin.H{
 			"app":            "worklog",
 			"exported_at":    time.Now().Format(time.RFC3339),

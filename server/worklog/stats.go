@@ -49,14 +49,14 @@ func statsDashboard(db *gorm.DB) gin.HandlerFunc {
 		start, end := monthRange(now.Year(), int(now.Month()))
 		selfWorker, isWorker := ac.workerScope()
 		var out struct {
-			Month           string `json:"month"`
-			WorkerCount     int64  `json:"worker_count"`
-			MonthRecordCnt  int64  `json:"month_record_count"`
-			MonthWorkCents  int64  `json:"month_work_cents"`
-			UnsettledCents  int64  `json:"unsettled_cents"`
-			UnsettledCount  int64  `json:"unsettled_count"`
-			AdvanceCents    int64  `json:"advance_cents"`
-			SettledCents    int64  `json:"settled_cents"`
+			Month          string `json:"month"`
+			WorkerCount    int64  `json:"worker_count"`
+			MonthRecordCnt int64  `json:"month_record_count"`
+			MonthWorkCents int64  `json:"month_work_cents"`
+			UnsettledCents int64  `json:"unsettled_cents"`
+			UnsettledCount int64  `json:"unsettled_count"`
+			AdvanceCents   int64  `json:"advance_cents"`
+			SettledCents   int64  `json:"settled_cents"`
 		}
 		out.Month = start[:7]
 		workerQ := "user_id = ?"
@@ -69,8 +69,9 @@ func statsDashboard(db *gorm.DB) gin.HandlerFunc {
 		}
 		db.Model(&Worker{}).Where(workerQ, workerArgs...).Count(&out.WorkerCount)
 
-		recQ := "user_id = ? AND date BETWEEN ? AND ?"
-		recArgs := []interface{}{uid, start, end}
+		// 工资口径只算已审核记录；待审核在「报工审核」页单独看。
+		recQ := "user_id = ? AND date BETWEEN ? AND ? AND status = ?"
+		recArgs := []interface{}{uid, start, end, RecordStatusApproved}
 		if isWorker {
 			recQ += " AND worker_id = ?"
 			recArgs = append(recArgs, selfWorker)
@@ -79,16 +80,23 @@ func statsDashboard(db *gorm.DB) gin.HandlerFunc {
 		db.Model(&WorkRecord{}).Where(recQ, recArgs...).
 			Select("COALESCE(SUM(amount_cents),0)").Scan(&out.MonthWorkCents)
 
-		unQ := "user_id = ? AND settlement_id IS NULL"
-		unArgs := []interface{}{uid}
+		unRecQ := "user_id = ? AND settlement_id IS NULL AND status = ?"
+		unRecArgs := []interface{}{uid, RecordStatusApproved}
 		if isWorker {
-			unQ += " AND worker_id = ?"
-			unArgs = append(unArgs, selfWorker)
+			unRecQ += " AND worker_id = ?"
+			unRecArgs = append(unRecArgs, selfWorker)
 		}
-		db.Model(&WorkRecord{}).Where(unQ, unArgs...).
+		db.Model(&WorkRecord{}).Where(unRecQ, unRecArgs...).
 			Select("COALESCE(SUM(amount_cents),0)").Scan(&out.UnsettledCents)
-		db.Model(&WorkRecord{}).Where(unQ, unArgs...).Count(&out.UnsettledCount)
-		db.Model(&Advance{}).Where(unQ, unArgs...).
+		db.Model(&WorkRecord{}).Where(unRecQ, unRecArgs...).Count(&out.UnsettledCount)
+
+		unAdvQ := "user_id = ? AND settlement_id IS NULL"
+		unAdvArgs := []interface{}{uid}
+		if isWorker {
+			unAdvQ += " AND worker_id = ?"
+			unAdvArgs = append(unAdvArgs, selfWorker)
+		}
+		db.Model(&Advance{}).Where(unAdvQ, unAdvArgs...).
 			Select("COALESCE(SUM(amount_cents),0)").Scan(&out.AdvanceCents)
 		setQ := "user_id = ?"
 		setArgs := []interface{}{uid}
@@ -117,7 +125,7 @@ func statsMonthly(db *gorm.DB) gin.HandlerFunc {
 		start, end := monthRange(year, month)
 		projectID := c.Query("project_id")
 
-		rq := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ?", uid, start, end)
+		rq := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ? AND status = ?", uid, start, end, RecordStatusApproved)
 		aq := db.Model(&Advance{}).Where("user_id = ? AND date BETWEEN ? AND ?", uid, start, end)
 		if projectID != "" {
 			rq = rq.Where("project_id = ?", projectID)
@@ -225,7 +233,7 @@ func statsRange(db *gorm.DB) gin.HandlerFunc {
 		// GORM 的 Count/Scan 会把残留的 SELECT 子句带回下一条查询，扫进
 		// WorkRecord 时报错（整页 500）。
 		buildRecordQ := func() *gorm.DB {
-			q := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ?", uid, start, end)
+			q := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ? AND status = ?", uid, start, end, RecordStatusApproved)
 			if workerID != "" {
 				q = q.Where("worker_id = ?", workerID)
 			}
@@ -327,7 +335,7 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		var records []WorkRecord
-		q := db.Where("user_id = ? AND worker_id = ? AND date BETWEEN ? AND ?", dsUID, workerID, start, end)
+		q := db.Where("user_id = ? AND worker_id = ? AND date BETWEEN ? AND ? AND status = ?", dsUID, workerID, start, end, RecordStatusApproved)
 		q = pf.apply(q)
 		if err := q.Order("date ASC, id ASC").Find(&records).Error; err != nil {
 			response.ErrorInternal(c, "查询失败")
@@ -428,7 +436,7 @@ func statsByProject(db *gorm.DB) gin.HandlerFunc {
 			Amount    int64
 		}
 		var workSums []workSum
-		if err := db.Model(&WorkRecord{}).Where(dateQ, dsUID, start, end).
+		if err := db.Model(&WorkRecord{}).Where(dateQ+" AND status = ?", dsUID, start, end, RecordStatusApproved).
 			Select("project_id, COUNT(*) AS cnt, COALESCE(SUM(amount_cents),0) AS amount").
 			Group("project_id").Scan(&workSums).Error; err != nil {
 			response.ErrorInternal(c, "统计失败")

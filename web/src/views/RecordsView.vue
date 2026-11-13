@@ -1,12 +1,17 @@
 <template>
   <div class="page-container animate-fade-in">
-    <PageHeader title="记工" :description="isWorker ? '给自己记工：点工 / 点时 / 计件 / 休息' : '点工 / 点时 / 计件 / 休息，选人填数，工资自动算'">
+    <PageHeader title="记工" :description="isWorker ? (store.reviewRequired ? '给自己记工：提交后需班组长审核，通过才计入工资' : '给自己记工：点工 / 点时 / 计件 / 休息') : '点工 / 点时 / 计件 / 休息，选人填数，工资自动算'">
       <template #actions>
         <span v-if="isWorker && store.me?.self_worker_name" class="badge bg-brand-500/15 text-brand-600 dark:text-brand-400 !py-2 !px-3 text-xs">
           👷 我是工人 · {{ store.me.self_worker_name }}
         </span>
       </template>
     </PageHeader>
+
+    <!-- 员工提交需审核时先把规则说清楚：审核通过前不计工资 -->
+    <div v-if="isWorker && store.reviewRequired" class="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+      你提交的记工需要班组长审核，审核通过后才计入工资；「待审」标记会一直在明细里。
+    </div>
 
     <!-- 工地上下文：切换后当日列表/合计只显示该工地的记录，新记工默认落在这里 -->
     <div class="surface rounded-2xl p-2 sm:p-3">
@@ -41,10 +46,14 @@
       </div>
     </div>
 
-    <!-- 当日汇总 -->
+    <!-- 当日汇总（只含已审核；待审核单独提示，避免工人误以为已算工资） -->
     <div v-if="dayTotalCents > 0" class="surface rounded-2xl px-4 py-2.5 flex items-center justify-between">
       <span class="text-xs sm:text-sm text-muted-foreground">当日{{ projectLabel ? ` · ${projectLabel}` : '' }} 共 {{ dayRecordCount }} 笔</span>
       <span class="text-base sm:text-lg font-extrabold text-brand-600 dark:text-brand-400 tabular-nums font-display">{{ fmtMoney(dayTotalCents) }}</span>
+    </div>
+    <div v-if="dayPendingCount > 0" class="rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-2.5 flex items-center justify-between gap-2">
+      <span class="text-xs sm:text-sm text-amber-700 dark:text-amber-300">待审核 {{ dayPendingCount }} 笔（通过后才计入工资）</span>
+      <span class="text-sm font-bold text-amber-700 dark:text-amber-300 tabular-nums">{{ fmtMoney(dayPendingCents) }}</span>
     </div>
 
     <!-- 工人出勤列表：桌面行 / 手机独立卡片两套并存 -->
@@ -64,6 +73,8 @@
               <div class="flex items-center gap-2">
                 <span class="font-semibold text-foreground truncate">{{ row.name }}</span>
                 <span v-if="row.status === 'archived'" class="badge bg-muted text-muted-foreground">已归档</span>
+                <span v-if="row.pending_count" class="badge bg-amber-400/15 text-amber-600 dark:text-amber-300">待审 {{ row.pending_count }}</span>
+                <span v-if="row.rejected_count" class="badge bg-red-500/10 text-red-500">驳回 {{ row.rejected_count }}</span>
               </div>
               <div v-if="row.record_count > 0" class="text-xs text-muted-foreground mt-0.5">
                 <span v-if="row.days !== '0'">点工 {{ row.days }} 天</span>
@@ -80,7 +91,7 @@
               <div class="font-bold text-foreground tabular-nums text-sm">{{ fmtMoney(row.amount_cents) }}</div>
             </div>
             <div class="flex gap-1.5 shrink-0">
-              <button v-if="row.record_count > 0" class="btn-ghost !px-2 !py-1.5 sm:!px-3 sm:!py-2 text-xs" @click="openEditor(row)">详情</button>
+              <button v-if="row.record_count > 0 || row.pending_count || row.rejected_count" class="btn-ghost !px-2 !py-1.5 sm:!px-3 sm:!py-2 text-xs" @click="openEditor(row)">详情</button>
               <button class="btn-ghost !px-2 !py-1.5 sm:!px-3 sm:!py-2 text-xs whitespace-nowrap"
                       :disabled="isQuickPending(row.id)" @click="quickRecord(row)">
                 {{ isQuickPending(row.id) ? '记工中…' : '一键记工' }}
@@ -102,6 +113,8 @@
                 <div class="flex items-center gap-1.5">
                   <span class="font-semibold text-foreground truncate">{{ row.name }}</span>
                   <span v-if="row.status === 'archived'" class="badge bg-muted text-muted-foreground !px-1.5 !py-0 text-[10px]">已归档</span>
+                  <span v-if="row.pending_count" class="badge bg-amber-400/15 text-amber-600 dark:text-amber-300 !px-1.5 !py-0 text-[10px]">待审 {{ row.pending_count }}</span>
+                  <span v-if="row.rejected_count" class="badge bg-red-500/10 text-red-500 !px-1.5 !py-0 text-[10px]">驳回 {{ row.rejected_count }}</span>
                 </div>
                 <div v-if="row.record_count > 0" class="mt-0.5 truncate text-[11px] text-muted-foreground">
                   <span v-if="row.days !== '0'">点工 {{ row.days }} 天</span>
@@ -116,7 +129,7 @@
               <span v-if="row.record_count > 0" class="shrink-0 text-sm font-bold tabular-nums text-foreground">{{ fmtMoney(row.amount_cents) }}</span>
             </div>
             <div class="flex gap-1.5">
-              <button v-if="row.record_count > 0" class="btn-ghost flex-1 !px-2 !py-1.5 text-xs" @click="openEditor(row)">详情</button>
+              <button v-if="row.record_count > 0 || row.pending_count || row.rejected_count" class="btn-ghost flex-1 !px-2 !py-1.5 text-xs" @click="openEditor(row)">详情</button>
               <button class="btn-ghost flex-1 !px-2 !py-1.5 text-xs whitespace-nowrap"
                       :disabled="isQuickPending(row.id)" @click="quickRecord(row)">
                 {{ isQuickPending(row.id) ? '记工中…' : '一键记工' }}
@@ -173,12 +186,16 @@
           <SelectMenu v-model="form.project_id" :options="projectOptions" class="w-full" @change="onProjectChange" />
         </div>
 
-        <!-- 单价：按工地单价 / 工人单价自动带出，来源小字说明，可手动改 -->
-        <div v-if="form.type !== 'rest'">
+        <!-- 单价：按工地单价 / 工人单价自动带出，来源小字说明，可手动改；
+             员工不能改价，由服务端按档案/项目价计算，防止自行抬价 -->
+        <div v-if="form.type !== 'rest' && !isWorker">
           <label class="text-sm font-medium text-foreground block mb-1.5">单价（元）</label>
           <input v-model="priceInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="0.00" @input="priceTouched = true" />
           <p v-if="priceSourceText" class="mt-1 text-xs text-muted-foreground">{{ priceSourceText }}</p>
         </div>
+        <p v-else-if="form.type !== 'rest'" class="rounded-xl bg-muted px-3 py-2 text-xs text-muted-foreground">
+          员工记工不能手动改单价，系统按你的工人档案（日薪/时薪/月薪折算）或计件项目单价自动计算。
+        </p>
 
         <!-- 备注 -->
         <div>
@@ -215,17 +232,24 @@
 
         <!-- 当日已有记录 -->
         <div v-if="editingWorker && editingWorker.records.length > 0" class="pt-2 border-t border-border">
-          <div class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">当日已记 {{ editingWorker.record_count }} 笔 · 合计 {{ fmtMoney(editingWorker.amount_cents) }} · 点记录可改，点右侧🗑可删</div>
+          <div class="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-2">
+            已审核 {{ editingWorker.record_count }} 笔 · 合计 {{ fmtMoney(editingWorker.amount_cents) }}
+            <span v-if="editingWorker.pending_count" class="text-amber-600 dark:text-amber-300"> · 待审 {{ editingWorker.pending_count }} 笔 {{ fmtMoney(editingWorker.pending_amount_cents) }}</span>
+            · {{ isWorker ? '待审记录可改可删' : '点记录可改，点右侧🗑可删' }}
+          </div>
           <div class="divide-y divide-border">
             <div v-for="r in editingWorker.records" :key="r.id" class="w-full flex items-center justify-between py-1.5 text-left cursor-pointer" @click="editRecord(r)">
-              <span class="text-sm text-foreground">
+              <span class="text-sm text-foreground min-w-0">
                 <span class="badge bg-muted text-muted-foreground mr-1.5">{{ TYPE_LABELS[r.type] }}</span>
+                <span v-if="r.status === 'pending'" class="badge bg-amber-400/15 text-amber-600 dark:text-amber-300 mr-1.5">待审</span>
+                <span v-else-if="r.status === 'rejected'" class="badge bg-red-500/10 text-red-500 mr-1.5">驳回</span>
                 {{ r.quantity }}{{ r.type === 'day' ? ' 天' : r.type === 'hour' ? ' 时' : ' 件' }}
                 <span v-if="r.piece_name" class="text-muted-foreground">· {{ r.piece_name }}</span>
+                <span v-if="r.status === 'rejected' && r.review_note" class="block text-[11px] text-red-400 truncate">{{ r.review_note }}</span>
               </span>
               <span class="flex items-center gap-1.5 shrink-0">
                 <span class="text-sm font-semibold tabular-nums" :class="r.id === editingId ? 'text-brand-600' : ''">{{ fmtMoney(r.amount_cents) }}</span>
-                <button type="button" aria-label="删除这条记录" class="p-2 -mr-1.5 text-red-400 hover:text-red-500 transition-colors" @click.stop="askDeleteRecord(r.id!)">
+                <button v-if="canDeleteRecord(r)" type="button" aria-label="删除这条记录" class="p-2 -mr-1.5 text-red-400 hover:text-red-500 transition-colors" @click.stop="askDeleteRecord(r.id!)">
                   <svg class="w-4.5 h-4.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                 </button>
               </span>
@@ -511,6 +535,8 @@ const previewAmount = computed(() => {
 
 const dayTotalCents = computed(() => rows.value.reduce((s, r) => s + r.amount_cents, 0))
 const dayRecordCount = computed(() => rows.value.reduce((s, r) => s + r.record_count, 0))
+const dayPendingCount = computed(() => rows.value.reduce((s, r) => s + (r.pending_count || 0), 0))
+const dayPendingCents = computed(() => rows.value.reduce((s, r) => s + (r.pending_amount_cents || 0), 0))
 
 // 记工该落到哪个工地：优先当前上下文；全部工地时用「上次工地」；
 // 未分工地上下文或没有有效的上次工地时为 null（不分工地）。
@@ -597,7 +623,10 @@ async function quickRecord(row: DayWorkerRow) {
       note: '',
     })
     const amount = res.data?.data?.amount_cents
-    toast(`已一键记工：${row.name} · 点工 1 天 · ${fmtMoney(amount)}`)
+    const status = res.data?.data?.status
+    toast(status === 'pending'
+      ? `已提交：${row.name} · 点工 1 天 · 等班组长审核`
+      : `已一键记工：${row.name} · 点工 1 天 · ${fmtMoney(amount)}`)
     await loadDay()
   } catch (e: any) {
     const msg = e.response?.data?.message || '记工失败，请稍后重试'
@@ -613,7 +642,19 @@ function hasRest(row: DayWorkerRow): boolean {
   return row.records.some((r) => r.type === 'rest')
 }
 
+// 员工只能改自己「待审」的记录；已审核的由班组长处理。
+function canEditRecord(r: WorkRecord): boolean {
+  return !isWorker.value || r.status === 'pending'
+}
+function canDeleteRecord(r: WorkRecord): boolean {
+  return !isWorker.value || r.status === 'pending' || r.status === 'rejected'
+}
+
 function editRecord(r: WorkRecord) {
+  if (!canEditRecord(r)) {
+    toast('该记工已审核，不能修改；请联系班组长', 'error')
+    return
+  }
   editingId.value = r.id!
   form.value = {
     type: r.type as any,
@@ -639,13 +680,17 @@ async function saveRecord(keepOpen: boolean) {
   const isRest = form.value.type === 'rest'
   const priceCents = isRest ? 0 : Math.round((parseFloat(priceInput.value) || 0) * 100)
   if (!isRest && (!form.value.quantity || parseFloat(form.value.quantity) <= 0)) return toast('请填写数量', 'error')
-  if (!isRest && priceCents <= 0) return toast('请填写单价', 'error')
+  if (!isRest && isWorker.value && priceCents <= 0) {
+    return toast('你的工人档案还没有设置单价，请联系班组长设置日薪/时薪', 'error')
+  }
+  if (!isRest && !isWorker.value && priceCents <= 0) return toast('请填写单价', 'error')
   if (form.value.type === 'piece' && !form.value.piece_item_id) return toast('请选择计件项目', 'error')
   saving.value = true
   const dates = !editingId.value && multiDay.value && multiDays.value.length > 0
     ? multiDays.value
     : [selectedDate.value]
   let ok = 0
+  let pendingSaved = 0
   try {
     for (const d of dates) {
       const payload: WorkRecord = {
@@ -662,7 +707,8 @@ async function saveRecord(keepOpen: boolean) {
         await updateRecord(editingId.value, payload)
         toast('修改成功')
       } else {
-        await createRecord(payload)
+        const created = await createRecord(payload)
+        if (created.data?.data?.status === 'pending') pendingSaved++
         ok++
       }
     }
@@ -671,11 +717,11 @@ async function saveRecord(keepOpen: boolean) {
     if (savedProjectId) saveLastProjectFilter(savedProjectId)
     if (!editingId.value) {
       if (keepOpen) {
-        toast(`已记录，可继续记一笔`)
+        toast(pendingSaved > 0 ? '已提交，等班组长审核，可继续记一笔' : `已记录，可继续记一笔`)
         form.value.quantity = form.value.type === 'rest' ? '0' : form.value.quantity
         multiDays.value = []
       } else {
-        toast(ok > 1 ? `已连记 ${ok} 天` : '记工成功')
+        toast(pendingSaved > 0 ? `已提交${ok > 1 ? ` ${ok} 笔` : ''}，等班组长审核` : (ok > 1 ? `已连记 ${ok} 天` : '记工成功'))
         editorOpen.value = false
       }
     } else {

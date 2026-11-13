@@ -30,11 +30,20 @@ func parseQuantity(s string) (*big.Rat, error) {
 	return r, nil
 }
 
+// maxUnitPriceCents 单价上限：1000 万元（1e9 分）。防止极端输入让金额溢出，
+// 也避免把工资录成天文数字。数量本身已限制在 100 万以内。
+const maxUnitPriceCents int64 = 1_000_000_000
+
 // computeAmountCents 金额（分）= 数量 × 单价（分），四舍五入。
+// 用 big.Rat 精确计算后取整，不再经过 float64，避免大金额丢分/溢出。
 func computeAmountCents(q *big.Rat, unitPriceCents int64) int64 {
 	total := new(big.Rat).Mul(q, new(big.Rat).SetInt64(unitPriceCents))
-	f, _ := total.Float64()
-	return int64(math.Round(f))
+	s := total.FloatString(0) // 四舍五入，0.5 向远离零方向
+	n, ok := new(big.Int).SetString(s, 10)
+	if !ok || !n.IsInt64() {
+		return 0
+	}
+	return n.Int64()
 }
 
 // quantityMultipleOK 校验数量符合类型的步进：day 0.5 步进、hour 0.25 步进、piece 整数。
@@ -74,11 +83,11 @@ var typeLabels = map[string]string{
 }
 
 var methodLabels = map[string]string{
-	"cash":    "现金",
-	"wechat":  "微信",
-	"alipay":  "支付宝",
-	"bank":    "银行转账",
-	"other":   "其他",
+	"cash":   "现金",
+	"wechat": "微信",
+	"alipay": "支付宝",
+	"bank":   "银行转账",
+	"other":  "其他",
 }
 
 // dailyFromMonthly 月薪折算日薪：月薪 ÷ 当月实际天数，四舍五入到分。

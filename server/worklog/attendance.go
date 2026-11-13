@@ -154,7 +154,7 @@ func statsAttendanceRange(db *gorm.DB) gin.HandlerFunc {
 
 		// 每次返回新链，避免 Select/Scan 的残留子句污染下一条查询（statsRange 踩过）。
 		buildRecordQ := func() *gorm.DB {
-			q := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ?", dsUID, start, end)
+			q := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ? AND status = ?", dsUID, start, end, RecordStatusApproved)
 			q = pf.apply(q)
 			if workerID > 0 {
 				q = q.Where("worker_id = ?", workerID)
@@ -334,7 +334,7 @@ func buildReconcile(db *gorm.DB, dsUID, workerID uint, start, end string, pf pro
 		return nil, err
 	}
 
-	q := db.Where("user_id = ? AND worker_id = ? AND date BETWEEN ? AND ?", dsUID, workerID, start, end)
+	q := db.Where("user_id = ? AND worker_id = ? AND date BETWEEN ? AND ? AND status = ?", dsUID, workerID, start, end, RecordStatusApproved)
 	q = pf.apply(q)
 	var records []WorkRecord
 	if err := q.Order("date ASC, id ASC").Find(&records).Error; err != nil {

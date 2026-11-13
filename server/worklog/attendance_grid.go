@@ -124,7 +124,7 @@ func buildAttendanceGrid(db *gorm.DB, spec *attendanceExportSpec) (*attendanceGr
 	}
 
 	buildRecordQ := func() *gorm.DB {
-		q := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ?", spec.dsUID, spec.start, spec.end)
+		q := db.Model(&WorkRecord{}).Where("user_id = ? AND date BETWEEN ? AND ? AND status = ?", spec.dsUID, spec.start, spec.end, RecordStatusApproved)
 		q = spec.pf.apply(q)
 		if spec.workerID > 0 {
 			q = q.Where("worker_id = ?", spec.workerID)

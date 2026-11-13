@@ -330,15 +330,35 @@ func NewRouter(cfg config.Config, db *gorm.DB, jwtSecret string) *gin.Engine {
 
 	// Rate limiter for public endpoints
 	var publicLimiter gin.HandlerFunc
+	// 匿名报工接口单独放宽：一个车间几十台手机共用一个出口 IP，集中交班时
+	// 会瞬间超过全局公开接口的 20 次/分，正常报工不能被当成刷接口挡掉。
+	// 报工码本身是 32 位随机令牌，配合每 IP 每分钟 300~1200 次的上限已足够。
+	entryLimiter := middleware.LimitRequests(nil)
 	if cfg.RateLimit > 0 {
 		rl := middleware.NewRateLimiter(cfg.RateLimit, 1*time.Minute)
 		publicLimiter = middleware.LimitRequests(rl)
+		entryRate := cfg.RateLimit * 20
+		if entryRate < 300 {
+			entryRate = 300
+		}
+		if entryRate > 1200 {
+			entryRate = 1200
+		}
+		entryLimiter = middleware.LimitRequests(middleware.NewRateLimiter(entryRate, 1*time.Minute))
 	} else {
 		publicLimiter = middleware.LimitRequests(nil)
 	}
 
 	// Auth route groups shared by all features.
-	publicGroup := api.Group("", publicLimiter)
+	publicGroup := api.Group("")
+	publicGroup.Use(func(c *gin.Context) {
+		path := c.Request.URL.Path
+		if strings.Contains(path, "/api/worklog/public/") || strings.HasSuffix(path, "/api/qrcode") {
+			entryLimiter(c)
+			return
+		}
+		publicLimiter(c)
+	})
 	optionalAuthGroup := api.Group("")
 	optionalAuthGroup.Use(middleware.OptionalAuth(jwtSecret, db))
 	authGroup := api.Group("")

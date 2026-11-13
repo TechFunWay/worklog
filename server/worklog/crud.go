@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -13,6 +14,21 @@ import (
 
 func currentUID(c *gin.Context) uint {
 	return c.MustGet("userID").(uint)
+}
+
+// recordValidationMessage 把员工「没有档案单价」这种常见失败翻译成可操作的提示。
+func recordValidationMessage(ac *access, err error) string {
+	msg := err.Error()
+	if ac != nil && ac.Role == RoleWorker && msg == "请填写大于 0 的单价" {
+		return "你的工人档案还没有设置日薪/时薪（或计件项目没有单价），请联系班组长设置后再记工"
+	}
+	return msg
+}
+
+// effectiveRecords 只把已审核通过的记工算进工资、考勤、统计与结算。
+// 历史数据（升级前）与老板/组长直接录入的记录 GORM 默认值都是 approved。
+func effectiveRecords(q *gorm.DB) *gorm.DB {
+	return q.Where("status = ?", RecordStatusApproved)
 }
 
 func forbidden(c *gin.Context) {
@@ -70,11 +86,21 @@ func createWorker(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "请填写工人姓名")
 			return
 		}
+		if in.DailyWageCents < 0 || in.HourlyWageCents < 0 || in.MonthlyWageCents < 0 {
+			response.ErrorBadRequest(c, "工资不能为负数")
+			return
+		}
+		if in.DailyWageCents > maxUnitPriceCents || in.HourlyWageCents > maxUnitPriceCents || in.MonthlyWageCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "工资数值过大，请核对")
+			return
+		}
 		if in.Status == "" {
 			in.Status = "active"
 		}
 		in.ID = 0
-		in.UserID = uid
+		// 班组模式下老板/组长建档案都归数据集老板，不能落到组长个人账号，
+		// 否则记工按数据集校验时找不到这个工人（组长建了也用不了）。
+		in.UserID = ac.scopeUser()
 		if err := db.Create(&in).Error; err != nil {
 			response.ErrorInternal(c, "保存失败")
 			return
@@ -103,6 +129,14 @@ func updateWorker(db *gorm.DB) gin.HandlerFunc {
 		}
 		if strings.TrimSpace(in.Name) == "" {
 			response.ErrorBadRequest(c, "请填写工人姓名")
+			return
+		}
+		if in.DailyWageCents < 0 || in.HourlyWageCents < 0 || in.MonthlyWageCents < 0 {
+			response.ErrorBadRequest(c, "工资不能为负数")
+			return
+		}
+		if in.DailyWageCents > maxUnitPriceCents || in.HourlyWageCents > maxUnitPriceCents || in.MonthlyWageCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "工资数值过大，请核对")
 			return
 		}
 		item.Name = strings.TrimSpace(in.Name)
@@ -135,11 +169,16 @@ func deleteWorker(db *gorm.DB) gin.HandlerFunc {
 			notFound(c, "工人不存在")
 			return
 		}
-		var nRecords, nAdvances int64
+		var nRecords, nAdvances, nCodes int64
 		db.Model(&WorkRecord{}).Where("user_id = ? AND worker_id = ?", uid, item.ID).Count(&nRecords)
 		db.Model(&Advance{}).Where("user_id = ? AND worker_id = ?", uid, item.ID).Count(&nAdvances)
+		db.Model(&EntryCode{}).Where("user_id = ? AND worker_id = ?", uid, item.ID).Count(&nCodes)
 		if nRecords+nAdvances > 0 {
 			response.ErrorBadRequest(c, "该工人已有记工或借支记录，不能删除，请改为归档")
+			return
+		}
+		if nCodes > 0 {
+			response.ErrorBadRequest(c, "该工人被报工码绑定，不能删除，请先修改或删除报工码")
 			return
 		}
 		// 工地单独单价不阻止删除工人，直接一并清掉。
@@ -191,6 +230,10 @@ func createProject(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "工地单价不能为负数")
 			return
 		}
+		if in.DayPriceCents > maxUnitPriceCents || in.HourPriceCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "工地单价数值过大，请核对")
+			return
+		}
 		if in.Status == "" {
 			in.Status = "active"
 		}
@@ -226,6 +269,10 @@ func updateProject(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "工地单价不能为负数")
 			return
 		}
+		if in.DayPriceCents > maxUnitPriceCents || in.HourPriceCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "工地单价数值过大，请核对")
+			return
+		}
 		item.DayPriceCents = in.DayPriceCents
 		item.HourPriceCents = in.HourPriceCents
 		if in.Status == "active" || in.Status == "archived" {
@@ -250,6 +297,17 @@ func deleteProject(db *gorm.DB) gin.HandlerFunc {
 		var item Project
 		if err := db.Where("user_id = ? AND id = ?", uid, c.Param("id")).First(&item).Error; err != nil {
 			notFound(c, "工地不存在")
+			return
+		}
+		var nRecords, nCodes int64
+		db.Model(&WorkRecord{}).Where("user_id = ? AND project_id = ?", uid, item.ID).Count(&nRecords)
+		db.Model(&EntryCode{}).Where("user_id = ? AND project_id = ?", uid, item.ID).Count(&nCodes)
+		if nRecords > 0 {
+			response.ErrorBadRequest(c, "该工地已有记工记录，不能删除，请改为归档")
+			return
+		}
+		if nCodes > 0 {
+			response.ErrorBadRequest(c, "该工地被报工码绑定，不能删除，请先修改或删除报工码")
 			return
 		}
 		err := db.Transaction(func(tx *gorm.DB) error {
@@ -296,13 +354,18 @@ func createPieceItem(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		in.ID = 0
-		in.UserID = currentUID(c)
+		// 计件项目也归数据集的老板账号，保证组长建的项目能被记工/报表共用。
+		in.UserID = loadAccess(db, currentUID(c)).scopeUser()
 		in.Name = strings.TrimSpace(in.Name)
 		if in.Unit == "" {
 			in.Unit = "个"
 		}
 		if in.UnitPriceCents <= 0 {
 			response.ErrorBadRequest(c, "请填写大于 0 的单价")
+			return
+		}
+		if in.UnitPriceCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "单价过大，请核对")
 			return
 		}
 		if in.Status == "" {
@@ -343,6 +406,10 @@ func updatePieceItem(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "请填写大于 0 的单价")
 			return
 		}
+		if in.UnitPriceCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "单价过大，请核对")
+			return
+		}
 		item.UnitPriceCents = in.UnitPriceCents
 		item.Note = in.Note
 		if in.Status == "active" || in.Status == "archived" {
@@ -364,6 +431,17 @@ func deletePieceItem(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		uid = loadAccess(db, uid).scopeUser()
+		var nRecords, nCodes int64
+		db.Model(&WorkRecord{}).Where("user_id = ? AND piece_item_id = ?", uid, c.Param("id")).Count(&nRecords)
+		db.Model(&EntryCode{}).Where("user_id = ? AND piece_item_id = ?", uid, c.Param("id")).Count(&nCodes)
+		if nRecords > 0 {
+			response.ErrorBadRequest(c, "该计件项目已有记工记录，不能删除，请改为归档")
+			return
+		}
+		if nCodes > 0 {
+			response.ErrorBadRequest(c, "该计件项目被报工码绑定，不能删除，请先修改或删除报工码")
+			return
+		}
 		res := db.Where("user_id = ? AND id = ?", uid, c.Param("id")).Delete(&PieceItem{})
 		if res.Error != nil {
 			response.ErrorInternal(c, "删除失败")
@@ -380,14 +458,14 @@ func deletePieceItem(db *gorm.DB) gin.HandlerFunc {
 // ---- 记工 ----
 
 type recordInput struct {
-	WorkerID       uint    `json:"worker_id"`
-	ProjectID      *uint   `json:"project_id"`
-	PieceItemID    *uint   `json:"piece_item_id"`
-	Date           string  `json:"date"`
-	Type           string  `json:"type"`
-	Quantity       string  `json:"quantity"`
-	UnitPriceCents *int64  `json:"unit_price_cents"`
-	Note           string  `json:"note"`
+	WorkerID       uint   `json:"worker_id"`
+	ProjectID      *uint  `json:"project_id"`
+	PieceItemID    *uint  `json:"piece_item_id"`
+	Date           string `json:"date"`
+	Type           string `json:"type"`
+	Quantity       string `json:"quantity"`
+	UnitPriceCents *int64 `json:"unit_price_cents"`
+	Note           string `json:"note"`
 }
 
 // validateRecordInput 校验并填充记录字段（不含 UserID/ID）。
@@ -479,6 +557,9 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 	if price <= 0 {
 		return fmt.Errorf("请填写大于 0 的单价")
 	}
+	if price > maxUnitPriceCents {
+		return fmt.Errorf("单价过大，请核对")
+	}
 
 	rec.Quantity = normalizeQuantity(q)
 	rec.UnitPriceCents = price
@@ -493,12 +574,16 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 // dayWorkerRow 出勤日视图的每一行：工人 + 当日记录与小计。
 type dayWorkerRow struct {
 	Worker
-	Records      []WorkRecord `json:"records"`
-	AmountCents  int64        `json:"amount_cents"`
-	Days         string       `json:"days"`
-	Hours        string       `json:"hours"`
-	Pieces       string       `json:"pieces"`
-	RecordCount  int          `json:"record_count"`
+	Records     []WorkRecord `json:"records"`
+	AmountCents int64        `json:"amount_cents"`
+	Days        string       `json:"days"`
+	Hours       string       `json:"hours"`
+	Pieces      string       `json:"pieces"`
+	RecordCount int          `json:"record_count"`
+	// 待审核/被驳回单独计数：不计入上面的工资合计，前端用徽标提示。
+	PendingCount       int   `json:"pending_count"`
+	PendingAmountCents int64 `json:"pending_amount_cents"`
+	RejectedCount      int   `json:"rejected_count"`
 }
 
 func recordsByDate(db *gorm.DB) gin.HandlerFunc {
@@ -552,6 +637,15 @@ func recordsByDate(db *gorm.DB) gin.HandlerFunc {
 			row := dayWorkerRow{Worker: w, Records: recs}
 			var days, hours, pieces float64
 			for _, r := range row.Records {
+				switch r.Status {
+				case RecordStatusPending:
+					row.PendingCount++
+					row.PendingAmountCents += r.AmountCents
+					continue
+				case RecordStatusRejected:
+					row.RejectedCount++
+					continue
+				}
 				row.AmountCents += r.AmountCents
 				row.RecordCount++
 				switch r.Type {
@@ -587,6 +681,12 @@ func listRecords(db *gorm.DB) gin.HandlerFunc {
 		}
 		if v := c.Query("type"); v != "" {
 			q = q.Where("type = ?", v)
+		}
+		if v := c.Query("status"); v == RecordStatusPending || v == RecordStatusApproved || v == RecordStatusRejected {
+			q = q.Where("status = ?", v)
+		}
+		if v := c.Query("source"); v != "" {
+			q = q.Where("source = ?", v)
 		}
 		if v := c.Query("settled"); v == "0" {
 			q = q.Where("settlement_id IS NULL")
@@ -673,15 +773,28 @@ func createRecord(db *gorm.DB) gin.HandlerFunc {
 		}
 		if sw, ok := ac.workerScope(); ok {
 			in.WorkerID = sw // 员工只能给自己记工
+			// 员工不能自带单价：否则关闭审核的班组里员工可自行抬价，
+			// 或被审核时漏看。点工/点时按工人档案与工地价、计件按项目单价计算。
+			in.UnitPriceCents = nil
 		}
 		dsUID := ac.scopeUser()
 		var rec WorkRecord
 		if err := validateRecordInput(db, dsUID, &in, &rec); err != nil {
-			response.ErrorBadRequest(c, err.Error())
+			response.ErrorBadRequest(c, recordValidationMessage(ac, err))
 			return
 		}
 		rec.UserID = dsUID
 		rec.CreatedBy = uid
+		rec.Source = RecordSourceManual
+		// 员工提交的记工按班组开关先落待审核；老板/组长代记直接生效。
+		rec.Status = RecordStatusApproved
+		if ac.Role == RoleWorker && ac.ReviewRequired {
+			rec.Status = RecordStatusPending
+			var w Worker
+			if err := db.Select("name").Where("id = ?", rec.WorkerID).First(&w).Error; err == nil {
+				rec.SubmitterName = w.Name
+			}
+		}
 		if err := db.Create(&rec).Error; err != nil {
 			response.ErrorInternal(c, "保存失败: "+err.Error())
 			return
@@ -701,9 +814,15 @@ func updateRecord(db *gorm.DB) gin.HandlerFunc {
 			notFound(c, "记录不存在")
 			return
 		}
-		if sw, ok := ac.workerScope(); ok && rec.WorkerID != sw {
-			forbidden(c)
-			return
+		if sw, ok := ac.workerScope(); ok {
+			if rec.WorkerID != sw {
+				forbidden(c)
+				return
+			}
+			if rec.Status != RecordStatusPending {
+				response.ErrorBadRequest(c, "该记工已审核，不能修改；请联系班组长")
+				return
+			}
 		}
 		if rec.SettlementID != nil {
 			response.ErrorBadRequest(c, "该记录已结算，不能修改")
@@ -716,10 +835,19 @@ func updateRecord(db *gorm.DB) gin.HandlerFunc {
 		}
 		if sw, ok := ac.workerScope(); ok {
 			in.WorkerID = sw
+			in.UnitPriceCents = nil // 员工改待审记录也不能自带单价
 		}
 		if err := validateRecordInput(db, dsUID, &in, &rec); err != nil {
-			response.ErrorBadRequest(c, err.Error())
+			response.ErrorBadRequest(c, recordValidationMessage(ac, err))
 			return
+		}
+		// 班组长修正被驳回的记录后直接视为审核通过，免得再走一遍审核。
+		if rec.Status == RecordStatusRejected {
+			rec.Status = RecordStatusApproved
+			rec.ReviewedBy = &uid
+			now := time.Now()
+			rec.ReviewedAt = &now
+			rec.ReviewNote = "班组长修改后生效"
 		}
 		if err := db.Save(&rec).Error; err != nil {
 			response.ErrorInternal(c, "保存失败")
@@ -740,9 +868,15 @@ func deleteRecord(db *gorm.DB) gin.HandlerFunc {
 			notFound(c, "记录不存在")
 			return
 		}
-		if sw, ok := ac.workerScope(); ok && rec.WorkerID != sw {
-			forbidden(c)
-			return
+		if sw, ok := ac.workerScope(); ok {
+			if rec.WorkerID != sw {
+				forbidden(c)
+				return
+			}
+			if rec.Status == RecordStatusApproved {
+				response.ErrorBadRequest(c, "该记工已审核通过，不能删除；请联系班组长")
+				return
+			}
 		}
 		if rec.SettlementID != nil {
 			response.ErrorBadRequest(c, "该记录已结算，不能删除；如需调整请先撤销结算")

@@ -23,6 +23,19 @@
       </div>
     </div>
 
+    <!-- 待审核提醒：工人扫码/员工提交的报工在这里一键进入审核 -->
+    <RouterLink
+      v-if="!isWorker && store.pendingReview > 0"
+      to="/admin/review"
+      class="flex items-center justify-between gap-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-3 hover:bg-amber-400/15 transition-colors"
+    >
+      <span class="min-w-0 flex items-center gap-2.5">
+        <span class="w-8 h-8 rounded-full bg-amber-400/20 text-amber-500 flex items-center justify-center text-sm shrink-0">📋</span>
+        <span class="text-sm font-semibold text-foreground truncate">有 {{ store.pendingReview }} 笔报工待你审核</span>
+      </span>
+      <span class="shrink-0 text-sm font-bold text-amber-600 dark:text-amber-300">去审核 →</span>
+    </RouterLink>
+
     <!-- Stat cards -->
     <div class="grid grid-cols-2 xl:grid-cols-4 gap-2.5 sm:gap-4">
       <div v-for="card in statCards" :key="card.label" class="surface rounded-2xl p-3 sm:p-5">
@@ -131,6 +144,7 @@ const quickActions = computed(() => isWorker.value
 
 onMounted(async () => {
   await store.load()
+  await store.refreshReview()
   try {
     const d = await statsDashboard()
     if (d.data?.code === 0) stats.value = d.data.data

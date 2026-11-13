@@ -23,6 +23,13 @@ const router = createRouter({
       meta: { requiresAuth: false }
     },
     {
+      // 工人扫码报工：免登录页，靠 URL 里的报工码令牌识别；不能套 MainLayout。
+      path: '/entry/:token',
+      name: 'Entry',
+      component: () => import('../views/EntryView.vue'),
+      meta: { requiresAuth: false }
+    },
+    {
       // 后台路由统一前缀为 /admin，需要登录。
       path: '/admin',
       component: () => import('../layouts/MainLayout.vue'),
@@ -32,6 +39,9 @@ const router = createRouter({
         { path: 'profile', name: 'Profile', component: () => import('../views/ProfileView.vue') },
         { path: 'settings', name: 'Settings', component: () => import('../views/SettingsView.vue') },
         { path: 'records', name: 'Records', component: () => import('../views/RecordsView.vue') },
+        { path: 'review', name: 'Review', component: () => import('../views/ReviewView.vue') },
+        { path: 'batch', name: 'Batch', component: () => import('../views/BatchEntryView.vue') },
+        { path: 'entry-codes', name: 'EntryCodes', component: () => import('../views/EntryCodesView.vue') },
         { path: 'workers', name: 'Workers', component: () => import('../views/WorkersView.vue') },
         { path: 'projects', name: 'Projects', component: () => import('../views/ProjectsView.vue') },
         { path: 'piece-items', name: 'PieceItems', component: () => import('../views/PieceItemsView.vue') },

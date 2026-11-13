@@ -15,12 +15,14 @@ import (
 // Team 班组：老板创建，成员凭邀请码加入。班组业务数据归属老板账号（user_id）。
 // 一个老板可创建多个班组（上限 maxTeamsPerUser）；成员同一时间只属于一个班组。
 type Team struct {
-	ID          uint      `gorm:"primarykey" json:"id"`
-	Name        string    `gorm:"not null" json:"name"`
-	OwnerUserID uint      `gorm:"index;not null" json:"-"`
-	InviteCode  string    `gorm:"uniqueIndex;not null" json:"invite_code"`
-	Note        string    `json:"note"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          uint   `gorm:"primarykey" json:"id"`
+	Name        string `gorm:"not null" json:"name"`
+	OwnerUserID uint   `gorm:"index;not null" json:"-"`
+	InviteCode  string `gorm:"uniqueIndex;not null" json:"invite_code"`
+	Note        string `json:"note"`
+	// 员工在应用内提交的记工是否需要班组长审核（扫码报工不受此开关影响，默认进待审）。
+	ReviewRequired bool      `gorm:"default:false" json:"review_required"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // TeamMember 班组成员。Role: boss / leader / worker。
@@ -64,12 +66,13 @@ type TeamCard struct {
 
 // access 当前请求的访问上下文：数据集归属 + 角色。
 type access struct {
-	OwnerUID     uint   // 数据集归属用户（班组模式下=老板）
-	UID          uint   // 当前登录账号
-	Role         string // boss / leader / worker
-	TeamID       *uint
-	TeamName     string
-	SelfWorkerID *uint // worker 角色绑定的工人档案
+	OwnerUID       uint   // 数据集归属用户（班组模式下=老板）
+	UID            uint   // 当前登录账号
+	Role           string // boss / leader / worker
+	TeamID         *uint
+	TeamName       string
+	ReviewRequired bool  // 员工应用内提交的记工需审核
+	SelfWorkerID   *uint // worker 角色绑定的工人档案
 }
 
 func (a *access) isBoss() bool    { return a.Role == RoleBoss }
@@ -86,6 +89,7 @@ func loadAccess(db *gorm.DB, uid uint) *access {
 	if err := db.Where("owner_user_id = ?", uid).Order("created_at ASC, id ASC").First(&owned).Error; err == nil {
 		ac.TeamID = &owned.ID
 		ac.TeamName = owned.Name
+		ac.ReviewRequired = owned.ReviewRequired
 		return ac
 	}
 	// 我加入的班组
@@ -97,6 +101,7 @@ func loadAccess(db *gorm.DB, uid uint) *access {
 			ac.TeamName = team.Name
 			ac.Role = member.Role
 			ac.OwnerUID = team.OwnerUserID
+			ac.ReviewRequired = team.ReviewRequired
 			ac.SelfWorkerID = member.WorkerID
 			return ac
 		}
@@ -214,21 +219,22 @@ func disbandTeamTx(tx *gorm.DB, team *Team) error {
 // ---- 班组 handlers ----
 
 type meInfo struct {
-	UID          uint   `json:"uid"`
-	Username     string `json:"username"`
-	Role         string `json:"role"` // boss / leader / worker
-	InTeam       bool   `json:"in_team"`
-	TeamID       *uint  `json:"team_id"`
-	TeamName     string `json:"team_name"`
-	SelfWorkerID *uint  `json:"self_worker_id"`
-	SelfWorker   string `json:"self_worker_name"`
+	UID            uint   `json:"uid"`
+	Username       string `json:"username"`
+	Role           string `json:"role"` // boss / leader / worker
+	InTeam         bool   `json:"in_team"`
+	TeamID         *uint  `json:"team_id"`
+	TeamName       string `json:"team_name"`
+	ReviewRequired bool   `json:"review_required"`
+	SelfWorkerID   *uint  `json:"self_worker_id"`
+	SelfWorker     string `json:"self_worker_name"`
 }
 
 func handleMe(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := currentUID(c)
 		ac := loadAccess(db, uid)
-		info := meInfo{UID: uid, Role: ac.Role, InTeam: ac.inTeam(), TeamID: ac.TeamID, TeamName: ac.TeamName, SelfWorkerID: ac.SelfWorkerID}
+		info := meInfo{UID: uid, Role: ac.Role, InTeam: ac.inTeam(), TeamID: ac.TeamID, TeamName: ac.TeamName, ReviewRequired: ac.ReviewRequired, SelfWorkerID: ac.SelfWorkerID}
 		var username string
 		db.Table("users").Select("username").Where("id = ?", uid).Scan(&username)
 		info.Username = username
@@ -275,8 +281,9 @@ func createTeam(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := currentUID(c)
 		var in struct {
-			Name string `json:"name"`
-			Note string `json:"note"`
+			Name           string `json:"name"`
+			Note           string `json:"note"`
+			ReviewRequired *bool  `json:"review_required"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil || len([]rune(strings.TrimSpace(in.Name))) < 2 {
 			response.ErrorBadRequest(c, "请填写班组名称（至少 2 个字）")
@@ -301,10 +308,11 @@ func createTeam(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		team := Team{
-			Name:        strings.TrimSpace(in.Name),
-			OwnerUserID: uid,
-			InviteCode:  genInviteCode(),
-			Note:        strings.TrimSpace(in.Note),
+			Name:           strings.TrimSpace(in.Name),
+			OwnerUserID:    uid,
+			InviteCode:     genInviteCode(),
+			Note:           strings.TrimSpace(in.Note),
+			ReviewRequired: in.ReviewRequired != nil && *in.ReviewRequired,
 		}
 		// 邀请码防碰撞
 		for i := 0; i < 5; i++ {
@@ -333,8 +341,9 @@ func updateTeam(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var in struct {
-			Name *string `json:"name"`
-			Note *string `json:"note"`
+			Name           *string `json:"name"`
+			Note           *string `json:"note"`
+			ReviewRequired *bool   `json:"review_required"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
 			response.ErrorBadRequest(c, "参数错误")
@@ -351,6 +360,9 @@ func updateTeam(db *gorm.DB) gin.HandlerFunc {
 		}
 		if in.Note != nil {
 			updates["note"] = strings.TrimSpace(*in.Note)
+		}
+		if in.ReviewRequired != nil {
+			updates["review_required"] = *in.ReviewRequired
 		}
 		if len(updates) == 0 {
 			response.ErrorBadRequest(c, "没有需要修改的内容")
@@ -497,6 +509,10 @@ func addTeamMember(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "单价不能为负数")
 			return
 		}
+		if in.DailyWageCents > maxUnitPriceCents || in.HourlyWageCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "单价数值过大，请核对")
+			return
+		}
 		// 目标班组必须属于当前老板
 		var team Team
 		if err := db.Where("id = ? AND owner_user_id = ?", in.TeamID, uid).First(&team).Error; err != nil {
@@ -604,15 +620,15 @@ func updateMemberWage(db *gorm.DB) gin.HandlerFunc {
 		}
 		updates := map[string]interface{}{}
 		if in.DailyWageCents != nil {
-			if *in.DailyWageCents < 0 {
-				response.ErrorBadRequest(c, "日薪不能为负数")
+			if *in.DailyWageCents < 0 || *in.DailyWageCents > maxUnitPriceCents {
+				response.ErrorBadRequest(c, "日薪数值不正确")
 				return
 			}
 			updates["daily_wage_cents"] = *in.DailyWageCents
 		}
 		if in.HourlyWageCents != nil {
-			if *in.HourlyWageCents < 0 {
-				response.ErrorBadRequest(c, "时薪不能为负数")
+			if *in.HourlyWageCents < 0 || *in.HourlyWageCents > maxUnitPriceCents {
+				response.ErrorBadRequest(c, "时薪数值不正确")
 				return
 			}
 			updates["hourly_wage_cents"] = *in.HourlyWageCents

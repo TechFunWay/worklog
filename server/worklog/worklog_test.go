@@ -41,6 +41,7 @@ func setupTest(t *testing.T) (*gin.Engine, *gorm.DB) {
 		c.Next()
 	})
 	setupRoutes(api, db)
+	setupPublicRoutes(api, db)
 	return r, db
 }
 

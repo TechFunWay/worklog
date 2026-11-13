@@ -46,6 +46,16 @@ export interface WorkRecord {
   project_name?: string
   piece_name?: string
   piece_unit?: string
+  // 审核流：员工/扫码提交先 pending，班组长审核后 approved 才计入工资。
+  status?: 'approved' | 'pending' | 'rejected'
+  source?: string
+  entry_code_id?: number | null
+  entry_code_name?: string
+  submitter_name?: string
+  reviewed_by?: number | null
+  reviewed_at?: string | null
+  review_note?: string
+  reviewer_name?: string
 }
 
 export interface Advance {
@@ -83,6 +93,9 @@ export interface DayWorkerRow extends Worker {
   hours: string
   pieces: string
   record_count: number
+  pending_count?: number
+  pending_amount_cents?: number
+  rejected_count?: number
 }
 
 // ---- 工人 ----
@@ -371,6 +384,7 @@ export interface MeInfo {
   in_team: boolean
   team_id?: number | null
   team_name?: string
+  review_required?: boolean
   self_worker_id?: number | null
   self_worker_name?: string
 }
@@ -404,6 +418,7 @@ export interface TeamInfo {
   name: string
   note?: string
   invite_code?: string
+  review_required?: boolean
   created_at?: string
 }
 
@@ -424,8 +439,8 @@ export const getTeam = () => request.get('/api/worklog/team')
 export const getTeamInfo = (teamId?: number) =>
   request.get('/api/worklog/team', { params: teamId ? { team_id: teamId } : undefined })
 export const listTeams = () => request.get('/api/worklog/teams')
-export const createTeam = (data: { name: string; note?: string }) => request.post('/api/worklog/teams', data)
-export const updateTeam = (id: number, data: { name?: string; note?: string }) => request.put(`/api/worklog/teams/${id}`, data)
+export const createTeam = (data: { name: string; note?: string; review_required?: boolean }) => request.post('/api/worklog/teams', data)
+export const updateTeam = (id: number, data: { name?: string; note?: string; review_required?: boolean }) => request.put(`/api/worklog/teams/${id}`, data)
 export const deleteTeam = (id: number) => request.delete(`/api/worklog/teams/${id}`)
 export const joinTeam = (data: { invite_code: string; worker_name: string }) => request.post('/api/worklog/team/join', data)
 export const addTeamMember = (data: {
@@ -581,3 +596,127 @@ export const importDB = (file: File) => {
   form.append('file', file)
   return request.post('/api/worklog/import/db', form, { timeout: 120000 })
 }
+
+// ---- 扫码报工：报工码管理 ----
+// 报工码是给工人手机扫的免登录入口。产品/工人可单独绑定或都绑定：
+// 都绑定时扫码后只剩数量一个输入框（可打印成每人每产品一张）。
+export interface EntryCode {
+  id: number
+  name: string
+  token: string
+  type?: string
+  piece_item_id?: number | null
+  worker_id?: number | null
+  project_id?: number | null
+  base_url?: string
+  auto_approve: boolean
+  enabled: boolean
+  expires_at?: string | null
+  note?: string
+  created_at?: string
+  piece_name?: string
+  piece_unit?: string
+  worker_name?: string
+  project_name?: string
+  today_count?: number
+  pending_count?: number
+  total_count?: number
+}
+export interface EntryCodeInput {
+  name?: string
+  piece_item_id?: number | null
+  worker_id?: number | null
+  project_id?: number | null
+  base_url?: string
+  auto_approve?: boolean
+  enabled?: boolean
+  expires_at?: string
+  note?: string
+}
+export const listEntryCodes = (params?: Record<string, unknown>) =>
+  request.get('/api/worklog/entry-codes', { params })
+export const createEntryCode = (data: EntryCodeInput) => request.post('/api/worklog/entry-codes', data)
+export const updateEntryCode = (id: number, data: EntryCodeInput) => request.put(`/api/worklog/entry-codes/${id}`, data)
+export const deleteEntryCode = (id: number) => request.delete(`/api/worklog/entry-codes/${id}`)
+export const rotateEntryCodeToken = (id: number) => request.post(`/api/worklog/entry-codes/${id}/rotate-token`)
+
+// ---- 报工审核 ----
+export interface ReviewSummary {
+  pending_count: number
+  pending_amount_cents: number
+  today_pending_count: number
+  today_pending_amount_cents: number
+  today_approved_count: number
+  today_approved_amount_cents: number
+  rejected_count: number
+}
+export const getReviewSummary = () => request.get('/api/worklog/review/summary')
+export const listReviewRecords = (params?: Record<string, unknown>) =>
+  request.get('/api/worklog/review/records', { params })
+export const approveRecords = (ids: number[]) => request.post('/api/worklog/review/approve', { ids })
+export const rejectRecords = (ids: number[], note: string) => request.post('/api/worklog/review/reject', { ids, note })
+
+// ---- 批量报工（班组长代录整班产量，直接生效）----
+export interface BatchRecordInput {
+  date: string
+  piece_item_id: number
+  project_id?: number | null
+  note?: string
+  rows: { worker_id: number; quantity: string }[]
+}
+export const batchCreateRecords = (data: BatchRecordInput) => request.post('/api/worklog/records/batch', data)
+
+// ---- 公开扫码报工（免登录，工人手机用）----
+export interface PublicEntryProduct {
+  id: number
+  name: string
+  unit?: string
+}
+export interface PublicEntryWorker {
+  id: number
+  name: string
+}
+export interface PublicEntryInfo {
+  site_title?: string
+  code: { name: string; auto_approve: boolean; note?: string }
+  product: PublicEntryProduct | null
+  products: PublicEntryProduct[]
+  worker: PublicEntryWorker | null
+  // 报工码本身绑定了工人（true）；?w= 只是预设，不是绑定。
+  worker_bound: boolean
+  workers: PublicEntryWorker[]
+  today: string
+  yesterday: string
+  allow_yesterday: boolean
+}
+export interface PublicEntrySubmitInput {
+  worker_id?: number
+  piece_item_id?: number
+  quantity: string
+  date?: string
+  note?: string
+}
+export interface PublicEntryTodayItem {
+  id: number
+  piece_name?: string
+  piece_unit?: string
+  quantity: string
+  status: string
+  created_at: string
+}
+export interface PublicEntrySubmitResult {
+  record: Pick<WorkRecord, 'id' | 'status' | 'quantity' | 'date'>
+  duplicate: boolean
+  message: string
+  status: string
+  // 本次提交对应的日期（今天/昨天），用于成功页文案与已报明细口径。
+  date: string
+  today_count: number
+  today_items: PublicEntryTodayItem[]
+}
+export const getPublicEntry = (token: string, workerId?: number) =>
+  request.get(`/api/worklog/public/entry/${encodeURIComponent(token)}`, {
+    params: workerId ? { w: workerId } : undefined,
+  })
+export const submitPublicEntry = (token: string, data: PublicEntrySubmitInput) =>
+  request.post(`/api/worklog/public/entry/${encodeURIComponent(token)}/records`, data)

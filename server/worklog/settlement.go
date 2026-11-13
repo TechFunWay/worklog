@@ -59,7 +59,7 @@ func unsettledSummary(db *gorm.DB, uid, workerID uint, start, end string, projec
 	if err := db.Where("user_id = ? AND id = ?", uid, workerID).First(&worker).Error; err != nil {
 		return nil, fmt.Errorf("工人不存在")
 	}
-	rq := db.Model(&WorkRecord{}).Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL", uid, workerID)
+	rq := db.Model(&WorkRecord{}).Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL AND status = ?", uid, workerID, RecordStatusApproved)
 	aq := db.Model(&Advance{}).Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL", uid, workerID)
 	if start != "" {
 		rq = rq.Where("date >= ?", start)
@@ -130,7 +130,7 @@ func unsettledList(db *gorm.DB) gin.HandlerFunc {
 		// 有未结算记工或借支的工人
 		var workerIDs []uint
 		db.Model(&WorkRecord{}).Select("DISTINCT worker_id").
-			Where("user_id = ? AND settlement_id IS NULL", uid).Scan(&workerIDs)
+			Where("user_id = ? AND settlement_id IS NULL AND status = ?", uid, RecordStatusApproved).Scan(&workerIDs)
 		var advanceIDs []uint
 		db.Model(&Advance{}).Select("DISTINCT worker_id").
 			Where("user_id = ? AND settlement_id IS NULL", uid).Scan(&advanceIDs)
@@ -190,7 +190,7 @@ func unsettledProjects(db *gorm.DB) gin.HandlerFunc {
 		var rows []row
 		if err := db.Model(&WorkRecord{}).
 			Select("project_id, COALESCE(SUM(amount_cents),0) AS amount, COUNT(DISTINCT worker_id) AS workers, COUNT(*) AS cnt").
-			Where("user_id = ? AND settlement_id IS NULL AND project_id IS NOT NULL", ac.scopeUser()).
+			Where("user_id = ? AND settlement_id IS NULL AND project_id IS NOT NULL AND status = ?", ac.scopeUser(), RecordStatusApproved).
 			Group("project_id").Scan(&rows).Error; err != nil {
 			response.ErrorInternal(c, "汇总失败")
 			return
@@ -243,7 +243,7 @@ func settlementPreview(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, err.Error())
 			return
 		}
-		rq := db.Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL", uid, workerID)
+		rq := db.Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL AND status = ?", uid, workerID, RecordStatusApproved)
 		aq := db.Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL", uid, workerID)
 		if start != "" {
 			rq = rq.Where("date >= ?", start)
@@ -277,7 +277,7 @@ func doSettle(tx *gorm.DB, uid, workerID uint, start, end, note string, projectI
 		return nil, fmt.Errorf("该时间段没有未结算的记录")
 	}
 
-	rq := tx.Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL", uid, workerID)
+	rq := tx.Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL AND status = ?", uid, workerID, RecordStatusApproved)
 	aq := tx.Where("user_id = ? AND worker_id = ? AND settlement_id IS NULL", uid, workerID)
 	if start != "" {
 		rq = rq.Where("date >= ?", start)
@@ -371,11 +371,11 @@ func createSettlement(db *gorm.DB) gin.HandlerFunc {
 		}
 		uid = ac.scopeUser()
 		var in struct {
-			WorkerID    uint   `json:"worker_id"`
-			Start       string `json:"start"`
-			End         string `json:"end"`
-			Note        string `json:"note"`
-			ProjectID   *uint  `json:"project_id"`
+			WorkerID  uint   `json:"worker_id"`
+			Start     string `json:"start"`
+			End       string `json:"end"`
+			Note      string `json:"note"`
+			ProjectID *uint  `json:"project_id"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
 			response.ErrorBadRequest(c, "参数错误")
@@ -429,7 +429,7 @@ func batchSettlement(db *gorm.DB) gin.HandlerFunc {
 		// 有未结算记录的工人（按项目结算时只取该项目的记录）
 		idSet := map[uint]bool{}
 		var ids []uint
-		recQ := db.Model(&WorkRecord{}).Where("user_id = ? AND settlement_id IS NULL", uid)
+		recQ := db.Model(&WorkRecord{}).Where("user_id = ? AND settlement_id IS NULL AND status = ?", uid, RecordStatusApproved)
 		if in.ProjectID != nil {
 			recQ = recQ.Where("project_id = ?", *in.ProjectID)
 		}

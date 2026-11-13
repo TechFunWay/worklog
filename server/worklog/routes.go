@@ -30,8 +30,20 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	g.GET("/records", recordsByDate(db))
 	g.GET("/records/list", listRecords(db))
 	g.POST("/records", createRecord(db))
+	g.POST("/records/batch", batchCreateRecords(db))
 	g.PUT("/records/:id", updateRecord(db))
 	g.DELETE("/records/:id", deleteRecord(db))
+
+	// 扫码报工：报工码管理与班组审核
+	g.GET("/entry-codes", listEntryCodes(db))
+	g.POST("/entry-codes", createEntryCode(db))
+	g.PUT("/entry-codes/:id", updateEntryCode(db))
+	g.DELETE("/entry-codes/:id", deleteEntryCode(db))
+	g.POST("/entry-codes/:id/rotate-token", rotateEntryCodeToken(db))
+	g.GET("/review/summary", reviewSummary(db))
+	g.GET("/review/records", listReviewRecords(db))
+	g.POST("/review/approve", approveRecords(db))
+	g.POST("/review/reject", rejectRecords(db))
 
 	// 借支
 	g.GET("/advances", listAdvances(db))

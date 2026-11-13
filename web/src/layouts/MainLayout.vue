@@ -47,7 +47,12 @@
               >
                 <span v-html="item.icon" class="w-5 h-5 block"></span>
               </span>
-              {{ item.label }}
+              <span class="min-w-0 truncate">{{ item.label }}</span>
+              <span
+                v-if="item.badge"
+                class="ml-auto shrink-0 inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-bold"
+                :class="isActive(item.to) ? 'bg-white/25 text-white' : 'bg-red-500 text-white'"
+              >{{ item.badge > 99 ? '99+' : item.badge }}</span>
             </RouterLink>
           </template>
 
@@ -195,11 +200,12 @@
         v-for="item in mobileNav"
         :key="item.to"
         :to="item.to"
-        class="flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-semibold min-h-14"
+        class="relative flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-semibold min-h-14"
         :class="isActive(item.to) ? 'text-brand-600 dark:text-brand-400' : 'text-muted-foreground'"
       >
         <span class="w-6 h-6 block" v-html="item.icon"></span>
         {{ item.label }}
+        <span v-if="item.badge" class="absolute top-1 right-3 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] leading-[18px] text-center font-bold">{{ item.badge > 99 ? '99+' : item.badge }}</span>
       </RouterLink>
       <button
         class="flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-semibold text-muted-foreground min-h-14"
@@ -268,6 +274,7 @@ onMounted(async () => {
   // store 还在内存里；沿用旧用户的 role 会让新用户看到错误导航（新注册账号
   // “不能正常使用”的表现之一）。
   await worklogStore.load(true)
+  await worklogStore.refreshReview()
   try {
     const res = await getVersion()
     if (res.data?.code === 0) {
@@ -294,15 +301,22 @@ const iconUser = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><pa
 
 const iconTeam = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4zm6-4a3 3 0 11-3-3"/></svg>'
 const iconCalendar = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>'
+const iconReview = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9 2 2 4-4"/></svg>'
+const iconBatch = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>'
+const iconQr = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4h6v6H4V4zm10 0h6v6h-6V4zM4 14h6v6H4v-6zm10 3h3v3h-3v-3zm3-3h3v3h-3v-3z"/></svg>'
 
-const navGroups = computed(() => {
-  const manage = [
+type NavItem = { to: string; label: string; icon: string; badge?: number }
+
+const navGroups = computed<{ label: string; items: NavItem[] }[]>(() => {
+  const manage: { label: string; items: NavItem[] }[] = [
     {
       label: '记工管理',
       items: [
         { to: '/admin', label: '工作台', icon: iconBoard },
         { to: '/admin/records', label: '记工', icon: iconRecord },
+        { to: '/admin/review', label: '报工审核', icon: iconReview, badge: worklogStore.pendingReview },
         { to: '/admin/attendance', label: '考勤表', icon: iconCalendar },
+        { to: '/admin/batch', label: '批量报工', icon: iconBatch },
         { to: '/admin/settlements', label: '结算', icon: iconSettle },
         { to: '/admin/stats', label: '统计', icon: iconStats },
       ],
@@ -314,6 +328,7 @@ const navGroups = computed(() => {
         { to: '/admin/advances', label: '借支', icon: iconAdvance },
         { to: '/admin/projects', label: '工地', icon: iconProject },
         { to: '/admin/piece-items', label: '计件项目', icon: iconPiece },
+        { to: '/admin/entry-codes', label: '扫码报工', icon: iconQr },
       ],
     },
     {
@@ -362,6 +377,9 @@ const adminNav = [
 const titleMap: Record<string, string> = {
   '/admin': '工作台',
   '/admin/records': '记工',
+  '/admin/review': '报工审核',
+  '/admin/batch': '批量报工',
+  '/admin/entry-codes': '扫码报工',
   '/admin/settlements': '结算',
   '/admin/settlements/': '工资条',
   '/admin/stats': '统计',
@@ -435,6 +453,20 @@ function onClickOutside(e: MouseEvent) {
 }
 onMounted(() => document.addEventListener('click', onClickOutside))
 onBeforeUnmount(() => document.removeEventListener('click', onClickOutside))
+
+// 待审核红点：切页刷新 + 每分钟刷新一次（页面可见时），工人扫码提交后不用手动刷新。
+watch(() => route.path, () => {
+  if (worklogStore.canManage) worklogStore.refreshReview()
+})
+let reviewTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  reviewTimer = setInterval(() => {
+    if (document.visibilityState === 'visible' && worklogStore.canManage) worklogStore.refreshReview()
+  }, 60000)
+})
+onBeforeUnmount(() => {
+  if (reviewTimer) clearInterval(reviewTimer)
+})
 </script>
 
 <style scoped>

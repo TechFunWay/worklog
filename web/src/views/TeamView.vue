@@ -12,7 +12,11 @@
           <h3 class="font-bold text-foreground text-lg">创建班组</h3>
           <p class="text-sm text-muted-foreground mt-1 mb-4">我是老板，创建班组后邀请工人和组长加入，帮他们记工。可创建多个班组。</p>
           <input v-model="newTeamName" class="input-field mb-2" placeholder="班组名称，如：张记工程队" />
-          <input v-model="newTeamNote" class="input-field mb-4" placeholder="备注（选填）" />
+          <input v-model="newTeamNote" class="input-field mb-2" placeholder="备注（选填）" />
+          <label class="flex items-start gap-2 mb-4 text-xs text-muted-foreground">
+            <input v-model="newTeamReview" type="checkbox" class="mt-0.5 w-4 h-4 accent-brand-500" />
+            <span>员工提交的记工需要我审核（推荐工厂场景开启；扫码报工始终待审）</span>
+          </label>
           <button class="btn-brand w-full min-h-11" :disabled="saving" @click="create">创建班组</button>
         </div>
         <div class="surface rounded-2xl p-4 sm:p-6">
@@ -90,6 +94,22 @@
         <div v-if="detail.is_owner" class="flex flex-wrap gap-2 mt-4">
           <button class="btn-ghost !px-3 min-h-11 text-xs" @click="openEditTeam">改名 / 备注</button>
         </div>
+        <div v-if="detail.is_owner" class="mt-3 flex items-center justify-between gap-3 rounded-xl border border-border bg-surface/60 px-3 py-2.5">
+          <div class="min-w-0">
+            <div class="text-sm font-semibold text-foreground">员工记工需审核</div>
+            <div class="text-[11px] text-muted-foreground leading-relaxed">开启后员工在应用内提交的记工先待审；扫码报工不受此开关影响，默认待审。</div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            :aria-checked="!!detail.team.review_required"
+            class="relative shrink-0 w-12 h-7 rounded-full transition-colors min-h-7"
+            :class="detail.team.review_required ? 'bg-brand-500' : 'bg-muted-foreground/30'"
+            @click="toggleReviewRequired"
+          >
+            <span class="absolute top-0.5 w-6 h-6 rounded-full bg-white shadow transition-all" :class="detail.team.review_required ? 'left-[22px]' : 'left-0.5'"></span>
+          </button>
+        </div>
       </div>
 
       <!-- 成员列表：手机与桌面都用卡片行，操作按钮第一屏内联可见 -->
@@ -145,6 +165,10 @@
       <div class="space-y-3">
         <input v-model="newTeamName" class="input-field" placeholder="班组名称，如：张记工程队" />
         <input v-model="newTeamNote" class="input-field" placeholder="备注（选填）" />
+        <label class="flex items-start gap-2 text-xs text-muted-foreground">
+          <input v-model="newTeamReview" type="checkbox" class="mt-0.5 w-4 h-4 accent-brand-500" />
+          <span>员工提交的记工需要我审核（扫码报工始终待审）</span>
+        </label>
         <div class="flex gap-2 pt-1">
           <button class="btn-ghost flex-1 min-h-11" @click="createOpen = false">取消</button>
           <button class="btn-brand flex-1 min-h-11" :disabled="saving" @click="create">创建班组</button>
@@ -212,6 +236,7 @@ const detail = ref<TeamDetail | null>(null)
 
 const newTeamName = ref('')
 const newTeamNote = ref('')
+const newTeamReview = ref(true)
 const joinCode = ref('')
 const joinName = ref('')
 const saving = ref(false)
@@ -315,6 +340,7 @@ function selectTeam(id: number) {
 function openCreateTeam() {
   newTeamName.value = ''
   newTeamNote.value = ''
+  newTeamReview.value = true
   createOpen.value = true
 }
 
@@ -329,7 +355,7 @@ async function create() {
   if (newTeamName.value.trim().length < 2) return toast('请填写班组名称', 'error')
   saving.value = true
   try {
-    const res = await createTeam({ name: newTeamName.value.trim(), note: newTeamNote.value.trim() || undefined })
+    const res = await createTeam({ name: newTeamName.value.trim(), note: newTeamNote.value.trim() || undefined, review_required: newTeamReview.value })
     if (res.data?.code === 0) {
       const created = res.data.data as TeamCard | undefined
       newTeamName.value = ''
@@ -360,6 +386,24 @@ async function join() {
     } else toast(res.data?.message || '加入失败', 'error')
   } catch (e: any) {
     toast(e.response?.data?.message || '加入失败', 'error')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function toggleReviewRequired() {
+  if (!detail.value || !detail.value.is_owner || saving.value) return
+  const next = !detail.value.team.review_required
+  saving.value = true
+  try {
+    const res = await updateTeam(detail.value.team.id, { review_required: next })
+    if (res.data?.code === 0) {
+      toast(next ? '已开启：员工提交的记工需审核' : '已关闭：员工提交的记工直接生效')
+      await loadDetail()
+      await store.load(true)
+    } else toast(res.data?.message || '保存失败', 'error')
+  } catch (e: any) {
+    toast(e.response?.data?.message || '保存失败', 'error')
   } finally {
     saving.value = false
   }

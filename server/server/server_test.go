@@ -966,11 +966,20 @@ func TestAppRoutesUsePublicRateLimiter(t *testing.T) {
 		RateLimit:  1,
 		UploadDir:  filepath.Join(dir, "uploads"),
 	}, db, secret)
+	// 普通公开接口（如站点配置）仍走严格限流：1 次/分钟。
+	if got := doJSON(r, http.MethodGet, "/api/configs/public", "", nil).Code; got != http.StatusOK {
+		t.Fatalf("first public config request returned %d", got)
+	}
+	if got := doJSON(r, http.MethodGet, "/api/configs/public", "", nil).Code; got != http.StatusTooManyRequests {
+		t.Fatalf("second public config request returned %d, want 429", got)
+	}
+	// 二维码图片与匿名报工接口单独放宽：一个车间几十台手机共用一个出口 IP，
+	// 集中交班扫码时不能被严格桶挡掉（仍受独立的 300+/分钟上限约束）。
 	if got := doJSON(r, http.MethodGet, "/api/qrcode?content=hello", "", nil).Code; got != http.StatusOK {
 		t.Fatalf("first QR request returned %d", got)
 	}
-	if got := doJSON(r, http.MethodGet, "/api/qrcode?content=hello", "", nil).Code; got != http.StatusTooManyRequests {
-		t.Fatalf("second QR request returned %d, want 429", got)
+	if got := doJSON(r, http.MethodGet, "/api/qrcode?content=hello", "", nil).Code; got != http.StatusOK {
+		t.Fatalf("second QR request returned %d, want 200 (bulk limiter)", got)
 	}
 }
 
