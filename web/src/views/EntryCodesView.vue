@@ -193,12 +193,12 @@
         </div>
 
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
+          <div class="min-w-0">
             <label class="mb-1.5 block text-sm font-medium text-foreground">计件项目</label>
             <SelectMenu v-model="form.piece_item_id" :options="pieceOptions" class="w-full" />
             <p class="mt-1 text-[11px] text-muted-foreground">绑定后扫码自动带出产品</p>
           </div>
-          <div>
+          <div class="min-w-0">
             <label class="mb-1.5 block text-sm font-medium text-foreground">工人</label>
             <SelectMenu v-model="form.worker_id" :options="workerOptions" class="w-full" />
             <p class="mt-1 text-[11px] text-muted-foreground">绑定后工人扫码只填数量</p>
@@ -212,9 +212,12 @@
 
         <div>
           <label class="mb-1.5 block text-sm font-medium text-foreground">报工地址（可选）</label>
-          <input v-model="form.base_url" class="input-field" inputmode="url" :placeholder="currentBase" />
-          <p class="mt-1 break-all text-[11px] text-muted-foreground">
-            二维码里用的地址。留空用当前页面地址 {{ currentBase }}；工人手机打不开飞牛网关地址（含 /app/，需要 NAS 登录）时，填内网 IP:端口 或公网直连地址。
+          <input v-model="form.base_url" class="input-field" inputmode="url" placeholder="留空自动；工人打不开时填直连地址" />
+          <p v-if="onGateway" class="mt-1 text-[11px] leading-relaxed text-amber-600 dark:text-amber-300">
+            当前在飞牛网关域，留空生成的二维码工人扫不开（需 NAS 登录）。请填内网 IP:端口 或公网直连地址，或改用直连地址打开本页再生成。
+          </p>
+          <p v-else class="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+            二维码里用的地址，留空使用当前页面地址（见上方提示）。
           </p>
         </div>
 
@@ -295,6 +298,7 @@ import Modal from '../components/Modal.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import EntryQrDialog from '../components/EntryQrDialog.vue'
 import SelectMenu from '../components/SelectMenu.vue'
+import { onFnOSGatewayOrigin } from '../utils/gateway'
 import Toast from '../components/Toast.vue'
 import { useWorklogStore } from '../stores/worklog'
 import {
@@ -375,11 +379,14 @@ const currentBase = (() => {
   return base
 })()
 
+// 网关域上「留空」生成的二维码工人扫不开（需 NAS 登录），表单里要显式提醒而不是把网关网址当占位符。
+const onGateway = onFnOSGatewayOrigin()
+
 const todayTotal = computed(() => codes.value.reduce((sum, c) => sum + (c.today_count || 0), 0))
 const pendingTotal = computed(() => summary.value?.pending_count || 0)
 
 const pieceOptions = computed(() => [
-  { value: '', label: '不绑定产品（扫码后让工人选）' },
+  { value: '', label: '不绑定产品' },
   ...pieces.value.map((p) => ({
     value: p.id as number,
     label: p.unit ? `${p.name}（${p.unit}）` : p.name,
@@ -387,7 +394,7 @@ const pieceOptions = computed(() => [
 ])
 
 const workerOptions = computed(() => [
-  { value: '', label: '不绑定工人（扫码后选姓名）' },
+  { value: '', label: '不绑定工人' },
   ...workers.value.map((w) => ({ value: w.id as number, label: w.name })),
 ])
 

@@ -5,6 +5,9 @@
 
 在飞牛 fnOS 上可通过 NAS 账号一键登录；也支持 Docker 与裸二进制部署。
 
+**📖 怎么用**：见 [使用指南](docs/05-使用指南.md) —— 三分钟上手、扫码报工全流程（建码 / 报工地址 / 打印分发）、
+报工审核与批量报工、考勤对工与导出到 NAS、结算与工资条、备份恢复，以及常见问题排查。
+
 ## 下载与安装
 
 | 渠道 | 获取方式 |
@@ -43,6 +46,17 @@
   <img src="images/screenshots/worklog-batch.png" width="640" alt="批量报工" />
 </p>
 
+**工人与借支**：一个工人一条档案（日薪 / 时薪 / 月薪，可绑应用账号）；借支按现金 / 微信 / 支付宝记账，结算自动抵扣
+
+<p>
+  <img src="images/screenshots/worklog-workers.png" width="640" alt="工人档案" />
+  <img src="images/screenshots/worklog-advance.png" width="640" alt="借支管理" />
+</p>
+
+**工地与单价**：工地可设默认日工 / 小时单价，同一工人可按工地单独定价，记工自动带出（优先级 手动 > 工地工人价 > 工地默认价 > 工人档案）
+
+![工地单价](images/screenshots/worklog-project-prices.png)
+
 **考勤表**：整月出勤日历与当月工钱汇总，任意日期可点进记工，支持导出考勤表
 
 ![考勤表](images/screenshots/worklog-attendance.png)
@@ -63,16 +77,22 @@
 
 ![深色主题](images/screenshots/worklog-dashboard-dark.png)
 
-**手机端**（390 × 844）：记工、考勤与班组
+**手机端**（390 × 844）：工作台、记工、报工审核（底栏带待审角标）、考勤与班组
 
 <p>
-  <img src="images/screenshots/worklog-mobile-record.png" width="300" alt="手机端记工" />
-  <img src="images/screenshots/worklog-mobile-attendance.png" width="300" alt="手机端考勤" />
-  <img src="images/screenshots/worklog-mobile-team.png" width="300" alt="手机端班组" />
+  <img src="images/screenshots/worklog-mobile-dashboard.png" width="270" alt="手机端工作台" />
+  <img src="images/screenshots/worklog-mobile-record.png" width="270" alt="手机端记工" />
+  <img src="images/screenshots/worklog-mobile-review.png" width="270" alt="手机端报工审核" />
+  <img src="images/screenshots/worklog-mobile-attendance.png" width="270" alt="手机端考勤" />
+  <img src="images/screenshots/worklog-mobile-team.png" width="270" alt="手机端班组" />
+  <img src="images/screenshots/worklog-mobile-export.png" width="270" alt="手机端导出" />
 </p>
 
-其余截图（手机端工作台、工人列表、借支、数据备份）见
-[images/screenshots/](images/screenshots/)，同一套图也随发行目录分发（`release/<版本>/screenshots-<版本>.zip`）。
+**数据备份与恢复**：导出 CSV / JSON 与数据库快照，支持从本地上传备份文件恢复（换机迁移），恢复前自动做安全快照
+
+![数据备份](images/screenshots/worklog-backup.png)
+
+其余截图见 [images/screenshots/](images/screenshots/)，同一套图也随发行目录分发（`release/<版本>/screenshots-<版本>.zip`）。
 
 ## 功能
 
@@ -163,9 +183,16 @@ docker compose up -d          # 端口 8909，数据卷 worklog-data
 make fnpack    # 产出 release/<版本>/techfunway-worklog.fpk（amd64 + arm64）
 ```
 
-## 设计文档
+## 文档
 
-见 [docs/](docs/)：需求分析、概要设计、详细设计。
+| 文档 | 内容 |
+|---|---|
+| [docs/05-使用指南.md](docs/05-使用指南.md) | **怎么用**：上手、记工、扫码报工与审核、批量报工、考勤对工与导出、结算、备份恢复、常见问题 |
+| [docs/01-需求分析.md](docs/01-需求分析.md) | 需求与场景边界 |
+| [docs/02-概要设计.md](docs/02-概要设计.md) | 模块划分与接口形态 |
+| [docs/03-详细设计.md](docs/03-详细设计.md) | 数据模型与实现说明 |
+| [docs/04-角色与考勤设计.md](docs/04-角色与考勤设计.md) | 角色权限、班组与考勤日历设计 |
+| [CHANGELOG.md](CHANGELOG.md) | 各版本更新日志 |
 
 ## 支持作者
 

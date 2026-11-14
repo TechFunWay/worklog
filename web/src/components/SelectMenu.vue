@@ -1,10 +1,10 @@
 <template>
-  <div ref="wrap" class="relative inline-block text-left">
+  <div ref="wrap" class="relative inline-block max-w-full text-left">
     <button
       ref="trigger"
       type="button"
       :disabled="disabled"
-      class="input-field !w-auto !py-2 flex items-center justify-between gap-2 pr-3 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+      class="input-field w-full min-w-0 !py-2 flex items-center justify-between gap-2 pr-3 text-left cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
       :aria-haspopup="'listbox'"
       :aria-expanded="open"
       @click="toggle"
@@ -13,7 +13,7 @@
       @keydown.up.prevent="open ? move(-1) : openMenu()"
       @keydown.enter.prevent="open ? pickHighlighted() : openMenu()"
     >
-      <span class="truncate" :class="selected ? 'text-foreground' : 'text-muted-foreground'">
+      <span class="min-w-0 flex-1 truncate" :class="selected ? 'text-foreground' : 'text-muted-foreground'">
         {{ selectedLabel || placeholder || '请选择' }}
       </span>
       <svg
