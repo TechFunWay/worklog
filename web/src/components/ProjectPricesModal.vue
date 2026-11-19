@@ -12,7 +12,8 @@
       <div class="rounded-xl bg-muted/60 px-3 py-2 text-[11px] sm:text-xs text-muted-foreground leading-relaxed">
         工地默认单价：日工 <span class="text-foreground font-semibold">{{ data.project_daily_price_cents ? fmtMoney(data.project_daily_price_cents) + '/个工' : '未设置' }}</span>
         · 小时 <span class="text-foreground font-semibold">{{ data.project_hourly_price_cents ? fmtMoney(data.project_hourly_price_cents) + '/小时' : '未设置' }}</span>
-        <br />给某个工人单独定价后，该工人在此工地优先用单独价；输入留空 = 不单独定价（按工地默认或工人单价）。
+        · 补贴 <span class="text-foreground font-semibold">{{ projectSubsidyCents ? fmtMoney(projectSubsidyCents) + '/出勤日' : '未设置' }}</span>
+        <br />给某个工人单独定价后，该工人在此工地优先用单独价；输入留空 = 不单独定价（按工地默认或工人单价）。补贴按「出勤日」计，与数量无关，半天班默认不带。
       </div>
 
       <!-- 逐工人覆盖价 -->
@@ -27,7 +28,7 @@
             <template v-if="r.monthly_wage_cents">月薪 {{ fmtMoney(r.monthly_wage_cents) }}（点工按当月天数折算）</template>
             <template v-else>日薪 {{ r.worker_daily_wage_cents ? fmtMoney(r.worker_daily_wage_cents) : '未设置' }} · 时薪 {{ r.worker_hourly_wage_cents ? fmtMoney(r.worker_hourly_wage_cents) : '未设置' }}</template>
           </div>
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-3 gap-2">
             <div class="min-w-0">
               <label class="mb-1 block text-[11px] text-muted-foreground">日工单价（元）</label>
               <input v-model="edits[r.worker_id].daily" type="text" inputmode="decimal"
@@ -37,6 +38,11 @@
               <label class="mb-1 block text-[11px] text-muted-foreground">小时单价（元）</label>
               <input v-model="edits[r.worker_id].hourly" type="text" inputmode="decimal"
                      class="input-field !px-2 !py-1.5 text-sm tabular-nums" :placeholder="placeholderOf(r, 'hourly')" />
+            </div>
+            <div class="min-w-0">
+              <label class="mb-1 block text-[11px] text-muted-foreground">默认补贴（元）</label>
+              <input v-model="edits[r.worker_id].subsidy" type="text" inputmode="decimal"
+                     class="input-field !px-2 !py-1.5 text-sm tabular-nums" :placeholder="subsidyPlaceholderOf(r)" />
             </div>
           </div>
         </div>
@@ -78,10 +84,20 @@ const errorMsg = ref('')
 const saving = ref(false)
 const toastMsg = ref('')
 const toastType = ref<'success' | 'error'>('success')
-// 每个工人的两个输入框（元，字符串；空 = 不覆盖）
-const edits = ref<Record<number, { daily: string; hourly: string }>>({})
+// 每个工人的三个输入框（元，字符串；空 = 不覆盖）：日价 / 时价 / 默认补贴
+const edits = ref<Record<number, { daily: string; hourly: string; subsidy: string }>>({})
 
 const title = computed(() => (props.project?.name ? `工地单价 · ${props.project.name}` : '工地单价'))
+
+// 工地默认补贴（顶部说明与占位都用它；老后端没顶层字段时回落到 project 对象）
+const projectSubsidyCents = computed(() => data.value?.project_subsidy_cents ?? data.value?.project?.subsidy_cents ?? 0)
+
+// 补贴留空时的占位：显示这一行不填会生效的补贴（工地单独 > 工地默认 > 工人档案）
+function subsidyPlaceholderOf(r: ProjectPriceRow): string {
+  const cents = r.effective_subsidy_cents ?? projectSubsidyCents.value
+  if (!cents || cents <= 0) return '按档案'
+  return (cents / 100).toFixed(2)
+}
 
 function toast(msg: string, type: 'success' | 'error' = 'success') {
   toastMsg.value = msg
@@ -94,11 +110,12 @@ function close() {
 }
 
 function initEdits(rows: ProjectPriceRow[]) {
-  const next: Record<number, { daily: string; hourly: string }> = {}
+  const next: Record<number, { daily: string; hourly: string; subsidy: string }> = {}
   for (const r of rows) {
     next[r.worker_id] = {
       daily: centsToYuanInput(r.daily_wage_cents),
       hourly: centsToYuanInput(r.hourly_wage_cents),
+      subsidy: centsToYuanInput(r.subsidy_cents),
     }
   }
   edits.value = next
@@ -147,14 +164,17 @@ async function save() {
   const project = props.project
   const d = data.value
   if (!project?.id || !d) return
-  const rows: { worker_id: number; daily_wage_cents: number; hourly_wage_cents: number }[] = []
+  // 服务端按「三项全 0 才删行」处理，所以留空要显式传 0，不能省略字段
+  const rows: { worker_id: number; daily_wage_cents: number; hourly_wage_cents: number; subsidy_cents: number }[] = []
   for (const r of d.rows) {
-    const edit = edits.value[r.worker_id] ?? { daily: '', hourly: '' }
+    const edit = edits.value[r.worker_id] ?? { daily: '', hourly: '', subsidy: '' }
     const daily = parsePrice(edit.daily)
     if (daily === null) return toast(`${r.worker_name} 的日工单价格式不正确，请填非负数字`, 'error')
     const hourly = parsePrice(edit.hourly)
     if (hourly === null) return toast(`${r.worker_name} 的小时单价格式不正确，请填非负数字`, 'error')
-    rows.push({ worker_id: r.worker_id, daily_wage_cents: daily, hourly_wage_cents: hourly })
+    const subsidy = parsePrice(edit.subsidy)
+    if (subsidy === null) return toast(`${r.worker_name} 的默认补贴格式不正确，请填非负数字`, 'error')
+    rows.push({ worker_id: r.worker_id, daily_wage_cents: daily, hourly_wage_cents: hourly, subsidy_cents: subsidy })
   }
   saving.value = true
   try {

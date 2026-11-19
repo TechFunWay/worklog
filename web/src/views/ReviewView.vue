@@ -201,7 +201,15 @@
                     <span class="badge bg-muted !px-2 !py-0.5 text-[11px] font-medium text-muted-foreground">{{ sourceLabel(r) }}</span>
                   </td>
                   <td class="max-w-[7rem] truncate px-3 py-2 text-muted-foreground">{{ r.submitter_name || '—' }}</td>
-                  <td class="whitespace-nowrap px-3 py-2 font-semibold tabular-nums">{{ fmtMoney(r.amount_cents) }}</td>
+                  <td class="px-3 py-2 font-semibold tabular-nums">
+                    {{ fmtMoney(r.amount_cents) }}
+                    <!-- 补贴/扣款要在审核时就看得见：只看总额看不出「这笔为什么多了 15 块」 -->
+                    <div v-if="subsidyBadge(r) || deductBadge(r)" class="mt-0.5 flex flex-wrap gap-1">
+                      <span v-if="subsidyBadge(r)" class="badge !px-1.5 !py-0 text-[10px] font-medium bg-brand-500/10 text-brand-600 dark:text-brand-400">{{ subsidyBadge(r) }}</span>
+                      <span v-if="deductBadge(r)" class="badge !px-1.5 !py-0 text-[10px] font-medium bg-red-500/10 text-red-500">{{ deductBadge(r) }}</span>
+                    </div>
+                    <div v-if="subsidyNoteOf(r)" class="mt-0.5 max-w-[10rem] whitespace-normal text-[10px] font-normal leading-snug text-muted-foreground">{{ subsidyNoteOf(r) }}</div>
+                  </td>
                   <td class="whitespace-nowrap px-3 py-2">
                     <span class="badge !px-2 !py-0.5 text-[11px]" :class="statusClass(r.status)">{{ statusLabel(r.status) }}</span>
                   </td>
@@ -258,7 +266,10 @@
                 <span>{{ r.date }}</span>
                 <span class="text-muted-foreground/60">·</span>
                 <span class="font-semibold tabular-nums text-foreground">{{ fmtMoney(r.amount_cents) }}</span>
+                <span v-if="subsidyBadge(r)" class="badge !px-1.5 !py-0 text-[10px] font-medium bg-brand-500/10 text-brand-600 dark:text-brand-400">{{ subsidyBadge(r) }}</span>
+                <span v-if="deductBadge(r)" class="badge !px-1.5 !py-0 text-[10px] font-medium bg-red-500/10 text-red-500">{{ deductBadge(r) }}</span>
               </div>
+              <p v-if="subsidyNoteOf(r)" class="break-words text-[11px] text-muted-foreground">补贴说明：{{ subsidyNoteOf(r) }}</p>
               <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
                 <span class="break-words">{{ sourceLabel(r) }}</span>
                 <span class="text-muted-foreground/60">·</span>
@@ -295,7 +306,7 @@
     <ConfirmDialog
       v-model="batchApproveOpen"
       title="批量通过"
-      :message="`确定通过选中的 ${approveIds.length} 条报工？通过后计入工资，可在统计与结算中体现。`"
+      :message="`确定通过选中的 ${approveIds.length} 条报工？通过后计入工资，可在统计与结算中体现。${approveSplitCount > 0 ? `\n其中 ${approveSplitCount} 条含补贴或扣款，金额已并进合计（明细行有标记）。` : ''}`"
       confirm-text="通过"
       @confirm="confirmBatchApprove"
     />
@@ -303,6 +314,9 @@
     <Modal v-model="rejectOpen" :title="rejectIds.length > 1 ? `驳回 ${rejectIds.length} 条报工` : '驳回报工'">
       <div class="space-y-3.5">
         <p class="text-sm text-muted-foreground">驳回后这些记工不会计入工资，审核结果与原因会同步给提交人。</p>
+        <p v-if="rejectSplitCount > 0" class="rounded-xl bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          其中 {{ rejectSplitCount }} 条含补贴或扣款（记工明细行上有标记），驳回会连这部分一起退回未计入工资。
+        </p>
         <div>
           <label for="reject-note" class="mb-1.5 block text-sm font-medium text-foreground">驳回原因</label>
           <textarea
@@ -349,7 +363,7 @@ import {
   type WorkRecord,
   type Worker,
 } from '../api/worklog'
-import { addDays, fmtMoney, fmtQty, todayStr } from '../utils/format'
+import { addDays, fmtMoney, fmtQty, fmtYuan, todayStr } from '../utils/format'
 import { useWorklogStore } from '../stores/worklog'
 
 type ReviewStatus = 'pending' | 'approved' | 'rejected' | 'all'
@@ -482,6 +496,29 @@ function sourceLabel(r: WorkRecord): string {
   if (r.source === 'manual') return r.submitter_name ? '员工提交' : '手工录入'
   return r.entry_code_name ? `扫码报工 · ${r.entry_code_name}` : '手工录入'
 }
+
+// 补贴/扣款徽标（v0.6.0）：员工与扫码提交的钱由服务端按档案算，但组长/老板代录
+// 的记录可以带补贴与扣款。审核只看总额会看不出「这笔为什么多了 15 块」，
+// 所以有值就在这行标出来（含说明），没有就一个字符都不加。
+function subsidyBadge(r: WorkRecord): string {
+  const cents = r.subsidy_cents ?? 0
+  return cents > 0 ? `含补贴 ${fmtYuan(cents)}` : ''
+}
+// 补贴说明单独一小行（不塞进徽标里，否则桌面表格那一列会被 40 字撑得老宽）
+function subsidyNoteOf(r: WorkRecord): string {
+  return (r.subsidy_cents ?? 0) > 0 ? (r.subsidy_note || '').trim() : ''
+}
+function deductBadge(r: WorkRecord): string {
+  const cents = r.deduct_cents ?? 0
+  return cents > 0 ? `含扣款 ${fmtYuan(cents)}` : ''
+}
+function splitCountOf(ids: number[]): number {
+  return items.value.filter((r) => r.id != null && ids.includes(r.id)
+    && ((r.subsidy_cents ?? 0) > 0 || (r.deduct_cents ?? 0) > 0)).length
+}
+// 批量通过 / 驳回的确认文案里也带上笔数，别让带补贴的单子混在总额里过去
+const approveSplitCount = computed(() => splitCountOf(approveIds.value))
+const rejectSplitCount = computed(() => splitCountOf(rejectIds.value))
 
 function dateParams(): Record<string, string> {
   if (dateMode.value === 'today') return { date: todayStr() }

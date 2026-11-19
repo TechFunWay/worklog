@@ -2,6 +2,7 @@ package worklog
 
 import (
 	"fmt"
+	"math/big"
 	"regexp"
 	"strings"
 	"time"
@@ -37,7 +38,22 @@ func forbidden(c *gin.Context) {
 
 var datePattern = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 
-func validDate(s string) bool { return datePattern.MatchString(s) }
+// validDate 校验日期既要是 YYYY-MM-DD 形状，也要是真实存在的一天。
+//
+// 只看形状会放过 2026-13-99、2026-02-30 这种日子：它们能落库，却永远落在
+// monthRange / BETWEEN 的区间之外 —— 记工记上了、月度统计里就是没有，属于静默丢账；
+// 结算期间取 MIN/MAX(date) 也会被这种脏值拉出诡异区间。
+// 用「解析后再格式化必须与原串相等」兜住 Go 对越界日期的宽容处理，闰年 2-29 仍然通过。
+func validDate(s string) bool {
+	if !datePattern.MatchString(s) {
+		return false
+	}
+	t, err := time.Parse("2006-01-02", s)
+	if err != nil {
+		return false
+	}
+	return t.Format("2006-01-02") == s
+}
 
 // ---- 工人 / 工地 / 计件项目（同构 CRUD） ----
 
@@ -86,12 +102,16 @@ func createWorker(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "请填写工人姓名")
 			return
 		}
-		if in.DailyWageCents < 0 || in.HourlyWageCents < 0 || in.MonthlyWageCents < 0 {
-			response.ErrorBadRequest(c, "工资不能为负数")
+		if in.DailyWageCents < 0 || in.HourlyWageCents < 0 || in.MonthlyWageCents < 0 || in.SubsidyCents < 0 {
+			response.ErrorBadRequest(c, "工资与补贴不能为负数")
 			return
 		}
 		if in.DailyWageCents > maxUnitPriceCents || in.HourlyWageCents > maxUnitPriceCents || in.MonthlyWageCents > maxUnitPriceCents {
 			response.ErrorBadRequest(c, "工资数值过大，请核对")
+			return
+		}
+		if in.SubsidyCents > maxSubsidyCents {
+			response.ErrorBadRequest(c, "默认补贴数值过大，请核对")
 			return
 		}
 		if in.Status == "" {
@@ -131,12 +151,16 @@ func updateWorker(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "请填写工人姓名")
 			return
 		}
-		if in.DailyWageCents < 0 || in.HourlyWageCents < 0 || in.MonthlyWageCents < 0 {
-			response.ErrorBadRequest(c, "工资不能为负数")
+		if in.DailyWageCents < 0 || in.HourlyWageCents < 0 || in.MonthlyWageCents < 0 || in.SubsidyCents < 0 {
+			response.ErrorBadRequest(c, "工资与补贴不能为负数")
 			return
 		}
 		if in.DailyWageCents > maxUnitPriceCents || in.HourlyWageCents > maxUnitPriceCents || in.MonthlyWageCents > maxUnitPriceCents {
 			response.ErrorBadRequest(c, "工资数值过大，请核对")
+			return
+		}
+		if in.SubsidyCents > maxSubsidyCents {
+			response.ErrorBadRequest(c, "默认补贴数值过大，请核对")
 			return
 		}
 		item.Name = strings.TrimSpace(in.Name)
@@ -145,6 +169,7 @@ func updateWorker(db *gorm.DB) gin.HandlerFunc {
 		item.DailyWageCents = in.DailyWageCents
 		item.HourlyWageCents = in.HourlyWageCents
 		item.MonthlyWageCents = in.MonthlyWageCents
+		item.SubsidyCents = in.SubsidyCents
 		if in.Status == "active" || in.Status == "archived" {
 			item.Status = in.Status
 		}
@@ -226,12 +251,16 @@ func createProject(db *gorm.DB) gin.HandlerFunc {
 		in.ID = 0
 		in.UserID = loadAccess(db, currentUID(c)).scopeUser()
 		in.Name = strings.TrimSpace(in.Name)
-		if in.DayPriceCents < 0 || in.HourPriceCents < 0 {
-			response.ErrorBadRequest(c, "工地单价不能为负数")
+		if in.DayPriceCents < 0 || in.HourPriceCents < 0 || in.SubsidyCents < 0 {
+			response.ErrorBadRequest(c, "工地单价与补贴不能为负数")
 			return
 		}
 		if in.DayPriceCents > maxUnitPriceCents || in.HourPriceCents > maxUnitPriceCents {
 			response.ErrorBadRequest(c, "工地单价数值过大，请核对")
+			return
+		}
+		if in.SubsidyCents > maxSubsidyCents {
+			response.ErrorBadRequest(c, "工地默认补贴数值过大，请核对")
 			return
 		}
 		if in.Status == "" {
@@ -265,16 +294,21 @@ func updateProject(db *gorm.DB) gin.HandlerFunc {
 		}
 		item.Name = strings.TrimSpace(in.Name)
 		item.Note = in.Note
-		if in.DayPriceCents < 0 || in.HourPriceCents < 0 {
-			response.ErrorBadRequest(c, "工地单价不能为负数")
+		if in.DayPriceCents < 0 || in.HourPriceCents < 0 || in.SubsidyCents < 0 {
+			response.ErrorBadRequest(c, "工地单价与补贴不能为负数")
 			return
 		}
 		if in.DayPriceCents > maxUnitPriceCents || in.HourPriceCents > maxUnitPriceCents {
 			response.ErrorBadRequest(c, "工地单价数值过大，请核对")
 			return
 		}
+		if in.SubsidyCents > maxSubsidyCents {
+			response.ErrorBadRequest(c, "工地默认补贴数值过大，请核对")
+			return
+		}
 		item.DayPriceCents = in.DayPriceCents
 		item.HourPriceCents = in.HourPriceCents
+		item.SubsidyCents = in.SubsidyCents
 		if in.Status == "active" || in.Status == "archived" {
 			item.Status = in.Status
 		}
@@ -284,6 +318,22 @@ func updateProject(db *gorm.DB) gin.HandlerFunc {
 		}
 		response.Success(c, item)
 	}
+}
+
+// validateProjectRef 校验「工地选填且必须属于当前数据集」。id 为 nil 或 0 视为不指定。
+// 记工、借支、报工码共用这一条口径，避免各处校验松紧不一。
+func validateProjectRef(db *gorm.DB, owner uint, id *uint) error {
+	if id == nil || *id == 0 {
+		return nil
+	}
+	var n int64
+	if err := db.Model(&Project{}).Where("user_id = ? AND id = ?", owner, *id).Count(&n).Error; err != nil {
+		return fmt.Errorf("工地校验失败")
+	}
+	if n == 0 {
+		return fmt.Errorf("工地不存在")
+	}
+	return nil
 }
 
 func deleteProject(db *gorm.DB) gin.HandlerFunc {
@@ -299,11 +349,17 @@ func deleteProject(db *gorm.DB) gin.HandlerFunc {
 			notFound(c, "工地不存在")
 			return
 		}
-		var nRecords, nCodes int64
+		var nRecords, nCodes, nAdvances int64
 		db.Model(&WorkRecord{}).Where("user_id = ? AND project_id = ?", uid, item.ID).Count(&nRecords)
 		db.Model(&EntryCode{}).Where("user_id = ? AND project_id = ?", uid, item.ID).Count(&nCodes)
+		db.Model(&Advance{}).Where("user_id = ? AND project_id = ?", uid, item.ID).Count(&nAdvances)
 		if nRecords > 0 {
 			response.ErrorBadRequest(c, "该工地已有记工记录，不能删除，请改为归档")
+			return
+		}
+		// 借支挂了工地就必须挡住删除，否则历史记录的项目归属会悬空、按项目对账失真。
+		if nAdvances > 0 {
+			response.ErrorBadRequest(c, "该工地已有借支记录，不能删除，请改为归档")
 			return
 		}
 		if nCodes > 0 {
@@ -466,6 +522,11 @@ type recordInput struct {
 	Quantity       string `json:"quantity"`
 	UnitPriceCents *int64 `json:"unit_price_cents"`
 	Note           string `json:"note"`
+	// 补贴/扣款用指针区分「没传」与「传了 0」：没传=服务端按档案默认带出，
+	// 传 0=老板明确表示这笔不要补贴（半天班最常见的说法）。
+	SubsidyCents *int64 `json:"subsidy_cents"`
+	DeductCents  *int64 `json:"deduct_cents"`
+	SubsidyNote  string `json:"subsidy_note"`
 }
 
 // validateRecordInput 校验并填充记录字段（不含 UserID/ID）。
@@ -503,10 +564,14 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 		rec.ProjectID = in.ProjectID
 	}
 
-	// 休息：不计钱
+	// 休息：不计钱，补贴与扣款也一并清零（休息日不该出现任何金额项）。
 	if in.Type == TypeRest {
 		rec.Quantity = "0"
 		rec.UnitPriceCents = 0
+		rec.WageCents = 0
+		rec.SubsidyCents = 0
+		rec.SubsidyNote = ""
+		rec.DeductCents = 0
 		rec.AmountCents = 0
 		return nil
 	}
@@ -537,16 +602,17 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 		}
 	}
 
-	// 单价：手动传的最优先；未传则按「工地单独价 > 工地默认价 > 工人单价」
-	// 自动带出（点工月薪工按记工日期所在月天数折算，缺勤不记工即自然扣款），
-	// 计件仍按计件项目单价。工地单价规则见 project_prices.go。
+	// 生效价与默认补贴：单价沿用「工地单独价 > 工地默认价 > 工人单价」四层链
+	// （点工月薪工按记工日期所在月天数折算，缺勤不记工即自然扣款），计件仍按
+	// 计件项目单价。补贴/扣款与单价解耦——粉丝反馈「补贴算进单价里，半天班没补贴
+	// 就得改单价，不方便快速记工」，规则见 docs/06 §5。
+	rates := effectiveRates(db, uid, worker, project, in.Date)
 	price := int64(0)
 	if in.UnitPriceCents != nil {
 		price = *in.UnitPriceCents
 	} else if in.Type == TypePiece {
 		price = pieceItem.UnitPriceCents
 	} else {
-		rates := effectiveRates(db, uid, worker, project, in.Date)
 		switch in.Type {
 		case TypeDay:
 			price = rates.Daily
@@ -561,9 +627,38 @@ func validateRecordInput(db *gorm.DB, uid uint, in *recordInput, rec *WorkRecord
 		return fmt.Errorf("单价过大，请核对")
 	}
 
+	// 补贴：手填（含显式 0）最优先；没传才按档案带默认值。
+	// 自动带默认值有三个前提：非计件（计件按件算钱，按出勤日的补贴语义不符）、
+	// 数量 ≥ 1 个工（半天默认不带，不替老板猜「半天管不管饭」）、档案上确实配了。
+	subsidy := int64(0)
+	if in.SubsidyCents != nil {
+		subsidy = *in.SubsidyCents
+	} else if in.Type != TypePiece && rates.Subsidy > 0 && q.Cmp(big.NewRat(1, 1)) >= 0 {
+		subsidy = rates.Subsidy
+	}
+	deduct := int64(0)
+	if in.DeductCents != nil {
+		deduct = *in.DeductCents
+	}
+	subsidyNote := in.SubsidyNote
+	if subsidy == 0 && deduct == 0 {
+		subsidyNote = "" // 没有补贴/扣款时不留孤立的说明文字
+	}
+
+	// 金额一律走唯一入口：AmountCents = 工钱 + 补贴 − 扣款，
+	// 下游所有 SUM(amount_cents) 因此自动含补贴，不需要逐处改写。
+	wage, total, err := recordAmountCents(q, price, subsidy, deduct)
+	if err != nil {
+		return err
+	}
+
 	rec.Quantity = normalizeQuantity(q)
 	rec.UnitPriceCents = price
-	rec.AmountCents = computeAmountCents(q, price)
+	rec.WageCents = wage
+	rec.SubsidyCents = subsidy
+	rec.SubsidyNote = limitRunes(strings.TrimSpace(subsidyNote), 40)
+	rec.DeductCents = deduct
+	rec.AmountCents = total
 
 	if in.Type == TypePiece {
 		rec.PieceItemID = in.PieceItemID
@@ -712,6 +807,24 @@ func listRecords(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// fillRecordNamesOne 填充单条记录的展示字段（工人/工地/计件项目名）。
+//
+// 别再写 fillRecordNames(db, []WorkRecord{rec})：切片字面量拷贝了一份 rec，
+// 名字填进的是那份拷贝，响应出来的 worker_name / project_name 仍是空 ——
+// v0.6.0 给借支加 project_name 时被端到端测试抓出来，这里一次性修掉。
+func fillRecordNamesOne(db *gorm.DB, rec *WorkRecord) {
+	one := []WorkRecord{*rec}
+	fillRecordNames(db, one)
+	*rec = one[0]
+}
+
+// fillAdvanceNamesOne 同上，单条借支的工人姓名与归属工地名。
+func fillAdvanceNamesOne(db *gorm.DB, item *Advance) {
+	one := []Advance{*item}
+	fillAdvanceNames(db, one)
+	*item = one[0]
+}
+
 func fillRecordNames(db *gorm.DB, records []WorkRecord) {
 	if len(records) == 0 {
 		return
@@ -776,6 +889,11 @@ func createRecord(db *gorm.DB) gin.HandlerFunc {
 			// 员工不能自带单价：否则关闭审核的班组里员工可自行抬价，
 			// 或被审核时漏看。点工/点时按工人档案与工地价、计件按项目单价计算。
 			in.UnitPriceCents = nil
+			// 补贴与扣款是同一条抬价通道，服务端一并清零：员工提交的钱数全部由
+			// 档案与工地价算出，要加补贴只能由老板/组长记或审核后调整。
+			in.SubsidyCents = nil
+			in.DeductCents = nil
+			in.SubsidyNote = ""
 		}
 		dsUID := ac.scopeUser()
 		var rec WorkRecord
@@ -799,7 +917,7 @@ func createRecord(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorInternal(c, "保存失败: "+err.Error())
 			return
 		}
-		fillRecordNames(db, []WorkRecord{rec})
+		fillRecordNamesOne(db, &rec)
 		response.Success(c, rec)
 	}
 }
@@ -836,6 +954,9 @@ func updateRecord(db *gorm.DB) gin.HandlerFunc {
 		if sw, ok := ac.workerScope(); ok {
 			in.WorkerID = sw
 			in.UnitPriceCents = nil // 员工改待审记录也不能自带单价
+			in.SubsidyCents = nil   // 补贴/扣款同理，员工不能自己给自己加钱
+			in.DeductCents = nil
+			in.SubsidyNote = ""
 		}
 		if err := validateRecordInput(db, dsUID, &in, &rec); err != nil {
 			response.ErrorBadRequest(c, recordValidationMessage(ac, err))
@@ -853,7 +974,7 @@ func updateRecord(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorInternal(c, "保存失败")
 			return
 		}
-		fillRecordNames(db, []WorkRecord{rec})
+		fillRecordNamesOne(db, &rec)
 		response.Success(c, rec)
 	}
 }
@@ -893,8 +1014,11 @@ func deleteRecord(db *gorm.DB) gin.HandlerFunc {
 // ---- 借支 ----
 
 type advanceInput struct {
-	WorkerID    uint   `json:"worker_id"`
-	Date        string `json:"date"`
+	WorkerID uint   `json:"worker_id"`
+	Date     string `json:"date"`
+	// ProjectID 选填（v0.6.0）：这笔借支算在哪个工地上。
+	// NULL = 未指定工地，只在按人结算时抵扣，不参与按项目结算（见 docs/06 §4.2）。
+	ProjectID   *uint  `json:"project_id"`
 	AmountCents int64  `json:"amount_cents"`
 	Method      string `json:"method"`
 	Note        string `json:"note"`
@@ -909,6 +1033,13 @@ func listAdvances(db *gorm.DB) gin.HandlerFunc {
 			q = q.Where("worker_id = ?", sw)
 		} else if v := c.Query("worker_id"); v != "" {
 			q = q.Where("worker_id = ?", v)
+		}
+		// 工地筛选与记工/考勤同一套语义（不传=全部、数字=指定工地、none=未分工地）
+		if pf, ok := parseProjectFilter(c); !ok {
+			response.ErrorBadRequest(c, "project_id 参数不正确")
+			return
+		} else {
+			q = pf.apply(q)
 		}
 		if v := c.Query("start"); validDate(v) {
 			q = q.Where("date >= ?", v)
@@ -929,6 +1060,7 @@ func listAdvances(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// fillAdvanceNames 批量补展示字段：工人姓名 + 工地名（一次 IN 查询，不逐条查）。
 func fillAdvanceNames(db *gorm.DB, items []Advance) {
 	if len(items) == 0 {
 		return
@@ -943,8 +1075,25 @@ func fillAdvanceNames(db *gorm.DB, items []Advance) {
 	for _, w := range workers {
 		names[w.ID] = w.Name
 	}
+	var pids []uint
+	for _, a := range items {
+		if a.ProjectID != nil {
+			pids = append(pids, *a.ProjectID)
+		}
+	}
+	projNames := map[uint]string{}
+	if len(pids) > 0 {
+		var projects []Project
+		db.Where("id IN ?", pids).Find(&projects)
+		for _, p := range projects {
+			projNames[p.ID] = p.Name
+		}
+	}
 	for i := range items {
 		items[i].WorkerName = names[items[i].WorkerID]
+		if items[i].ProjectID != nil {
+			items[i].ProjectName = projNames[*items[i].ProjectID]
+		}
 	}
 }
 
@@ -975,11 +1124,20 @@ func createAdvance(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "工人不存在")
 			return
 		}
+		if in.AmountCents > maxUnitPriceCents {
+			response.ErrorBadRequest(c, "借支金额过大，请核对")
+			return
+		}
+		// 借支归属的工地必须属于当前数据集（选填，NULL=未指定工地）。
+		if err := validateProjectRef(db, uid, in.ProjectID); err != nil {
+			response.ErrorBadRequest(c, err.Error())
+			return
+		}
 		if in.Method == "" {
 			in.Method = "cash"
 		}
 		item := Advance{
-			UserID: uid, WorkerID: in.WorkerID, Date: in.Date,
+			UserID: uid, WorkerID: in.WorkerID, ProjectID: in.ProjectID, Date: in.Date,
 			AmountCents: in.AmountCents, Method: in.Method, Note: in.Note,
 			CreatedBy: currentUID(c),
 		}
@@ -987,7 +1145,7 @@ func createAdvance(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorInternal(c, "保存失败")
 			return
 		}
-		fillAdvanceNames(db, []Advance{item})
+		fillAdvanceNamesOne(db, &item)
 		response.Success(c, item)
 	}
 }

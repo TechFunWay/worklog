@@ -31,12 +31,17 @@ const (
 	priceSourceNone          = "none"
 )
 
-// rateInfo 某个工人某天的生效单价与来源。
+// rateInfo 某个工人某天的生效单价、默认补贴与来源。
+//
+// Subsidy 是「默认补贴」（分/出勤日），不是金额计算结果：记工时是否带出它，
+// 由 crud 侧按「数量 ≥ 1」决定（半天默认不带，见 §5.4），扣款永远不自动带。
 type rateInfo struct {
-	Daily        int64
-	DailySource  string
-	Hourly       int64
-	HourlySource string
+	Daily         int64
+	DailySource   string
+	Hourly        int64
+	HourlySource  string
+	Subsidy       int64
+	SubsidySource string
 }
 
 // findProjectWorkerPrice 查某工人某工地的单独单价，没有返回 nil。
@@ -52,7 +57,7 @@ func findProjectWorkerPrice(db *gorm.DB, uid, projectID, workerID uint) *Project
 // effectiveRatesWith 按优先级算出生效单价；override 由调用方预先查好（避免列表 N+1）。
 // project 为 nil 表示这笔记工不分工地。
 func effectiveRatesWith(w Worker, project *Project, override *ProjectWorkerPrice, date string) rateInfo {
-	res := rateInfo{DailySource: priceSourceNone, HourlySource: priceSourceNone}
+	res := rateInfo{DailySource: priceSourceNone, HourlySource: priceSourceNone, SubsidySource: priceSourceNone}
 
 	// 点工日价
 	switch {
@@ -75,6 +80,17 @@ func effectiveRatesWith(w Worker, project *Project, override *ProjectWorkerPrice
 	case w.HourlyWageCents > 0:
 		res.Hourly, res.HourlySource = w.HourlyWageCents, priceSourceWorker
 	}
+
+	// 默认补贴：与单价同一条覆盖链（工地单独 > 工地默认 > 工人档案）。
+	// 这里只解析「档案上写了几块」，是否真的带进这笔记工由 crud 侧按数量决定。
+	switch {
+	case override != nil && override.SubsidyCents > 0:
+		res.Subsidy, res.SubsidySource = override.SubsidyCents, priceSourceProjectWorker
+	case project != nil && project.SubsidyCents > 0:
+		res.Subsidy, res.SubsidySource = project.SubsidyCents, priceSourceProject
+	case w.SubsidyCents > 0:
+		res.Subsidy, res.SubsidySource = w.SubsidyCents, priceSourceWorker
+	}
 	return res
 }
 
@@ -85,6 +101,14 @@ func effectiveRates(db *gorm.DB, uid uint, w Worker, project *Project, date stri
 		override = findProjectWorkerPrice(db, uid, project.ID, w.ID)
 	}
 	return effectiveRatesWith(w, project, override, date)
+}
+
+// subsidyOverride 取覆盖行上的默认补贴，没有覆盖行返回 0（前端据此决定输入框留空还是回填）。
+func subsidyOverride(override *ProjectWorkerPrice) int64 {
+	if override == nil {
+		return 0
+	}
+	return override.SubsidyCents
 }
 
 // projectPriceRow 工地单价管理页的一行：覆盖价 + 当前生效价 + 来源。
@@ -101,6 +125,10 @@ type projectPriceRow struct {
 	EffectiveHourlyCents    int64  `json:"effective_hourly_wage_cents"`
 	DailySource             string `json:"daily_source"`
 	HourlySource            string `json:"hourly_source"`
+	WorkerSubsidyCents      int64  `json:"worker_subsidy_cents"`
+	SubsidyCents            int64  `json:"subsidy_cents"`
+	EffectiveSubsidyCents   int64  `json:"effective_subsidy_cents"`
+	SubsidySource           string `json:"subsidy_source"`
 }
 
 // projectPrices 返回某工地的默认单价与该工地所有工人的覆盖价/生效价。
@@ -157,6 +185,10 @@ func projectPrices(db *gorm.DB) gin.HandlerFunc {
 				EffectiveHourlyCents:    rates.Hourly,
 				DailySource:             rates.DailySource,
 				HourlySource:            rates.HourlySource,
+				WorkerSubsidyCents:      w.SubsidyCents,
+				SubsidyCents:            subsidyOverride(override),
+				EffectiveSubsidyCents:   rates.Subsidy,
+				SubsidySource:           rates.SubsidySource,
 			}
 			if override != nil {
 				row.DailyWageCents = override.DailyWageCents
@@ -169,6 +201,7 @@ func projectPrices(db *gorm.DB) gin.HandlerFunc {
 			"project":                    project,
 			"project_daily_price_cents":  project.DayPriceCents,
 			"project_hourly_price_cents": project.HourPriceCents,
+			"project_subsidy_cents":      project.SubsidyCents,
 			"rows":                       rows,
 		})
 	}
@@ -194,6 +227,7 @@ func updateProjectPrices(db *gorm.DB) gin.HandlerFunc {
 				WorkerID        uint  `json:"worker_id"`
 				DailyWageCents  int64 `json:"daily_wage_cents"`
 				HourlyWageCents int64 `json:"hourly_wage_cents"`
+				SubsidyCents    int64 `json:"subsidy_cents"`
 			} `json:"rows"`
 		}
 		if err := c.ShouldBindJSON(&in); err != nil {
@@ -212,8 +246,12 @@ func updateProjectPrices(db *gorm.DB) gin.HandlerFunc {
 				return
 			}
 			seen[r.WorkerID] = true
-			if r.DailyWageCents < 0 || r.HourlyWageCents < 0 {
-				response.ErrorBadRequest(c, "单价不能为负数")
+			if r.DailyWageCents < 0 || r.HourlyWageCents < 0 || r.SubsidyCents < 0 {
+				response.ErrorBadRequest(c, "单价与补贴不能为负数")
+				return
+			}
+			if r.SubsidyCents > maxSubsidyCents {
+				response.ErrorBadRequest(c, "默认补贴数值过大，请核对")
 				return
 			}
 			var n int64
@@ -230,7 +268,8 @@ func updateProjectPrices(db *gorm.DB) gin.HandlerFunc {
 		err := db.Transaction(func(tx *gorm.DB) error {
 			for _, r := range in.Rows {
 				q := tx.Where("user_id = ? AND project_id = ? AND worker_id = ?", dsUID, project.ID, r.WorkerID)
-				if r.DailyWageCents == 0 && r.HourlyWageCents == 0 {
+				// 三项（日价/时价/补贴）全 0 = 该工人本工地无单独定价，删行回落上层。
+				if r.DailyWageCents == 0 && r.HourlyWageCents == 0 && r.SubsidyCents == 0 {
 					if err := q.Delete(&ProjectWorkerPrice{}).Error; err != nil {
 						return err
 					}
@@ -245,6 +284,7 @@ func updateProjectPrices(db *gorm.DB) gin.HandlerFunc {
 				}
 				row.DailyWageCents = r.DailyWageCents
 				row.HourlyWageCents = r.HourlyWageCents
+				row.SubsidyCents = r.SubsidyCents
 				if err := tx.Save(&row).Error; err != nil {
 					return err
 				}
@@ -259,7 +299,7 @@ func updateProjectPrices(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
-// effectivePrice 记工弹窗自动带价用：某工人某天在某工地的生效日价/时价与来源。
+// effectivePrice 记工弹窗自动带价用：某工人某天在某工地的生效日价/时价/默认补贴与来源。
 // 不传 project_id 表示不分工地；不传 date 用今天（月薪折算靠记工日期定当月天数）。
 func effectivePrice(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -321,11 +361,16 @@ func effectivePrice(db *gorm.DB) gin.HandlerFunc {
 			"worker_hourly_wage_cents":   worker.HourlyWageCents,
 			"project_daily_price_cents":  int64(0),
 			"project_hourly_price_cents": int64(0),
+			"subsidy_cents":              rates.Subsidy,
+			"subsidy_source":             rates.SubsidySource,
+			"worker_subsidy_cents":       worker.SubsidyCents,
+			"project_subsidy_cents":      int64(0),
 		}
 		if project != nil {
 			out["project_id"] = project.ID
 			out["project_daily_price_cents"] = project.DayPriceCents
 			out["project_hourly_price_cents"] = project.HourPriceCents
+			out["project_subsidy_cents"] = project.SubsidyCents
 		}
 		response.Success(c, out)
 	}

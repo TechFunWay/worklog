@@ -34,8 +34,60 @@ func parseQuantity(s string) (*big.Rat, error) {
 // 也避免把工资录成天文数字。数量本身已限制在 100 万以内。
 const maxUnitPriceCents int64 = 1_000_000_000
 
+// 补贴/扣款上限：单笔 100 万元（1e8 分）。与 maxUnitPriceCents 同一思路，
+// 防止极端输入把 int64 分撑爆，也挡掉「多打一个 0」这类手滑。
+const (
+	maxSubsidyCents int64 = 100_000_000
+	maxDeductCents  int64 = 100_000_000
+)
+
+// recordAmountCents 记工金额的唯一计算入口（v0.6.0 起）。
+//
+//	纯工钱 wage = 数量 × 单价
+//	应得合计 total = wage + 补贴 − 扣款
+//
+// AmountCents 是全应用唯一的「金额真相」：统计、考勤、对工、结算一律只 SUM 它。
+// 所以补贴与扣款必须在这里并进 total，任何地方不得绕过本函数直接改 AmountCents
+// —— 否则下游 16 处 SUM 会静默算错工资。
+//
+// 扣穿（补贴不够抵）返回错误而不是负数：记工金额恒 ≥ 0，
+// 「倒欠老板钱」请用借支或结算调整项表达，避免污染所有 SUM 与考勤合计的语义。
+func recordAmountCents(q *big.Rat, unitPriceCents, subsidyCents, deductCents int64) (wage, total int64, err error) {
+	if subsidyCents < 0 {
+		return 0, 0, fmt.Errorf("补贴不能为负数")
+	}
+	if deductCents < 0 {
+		return 0, 0, fmt.Errorf("扣款不能为负数")
+	}
+	if subsidyCents > maxSubsidyCents {
+		return 0, 0, fmt.Errorf("补贴过大，请核对")
+	}
+	if deductCents > maxDeductCents {
+		return 0, 0, fmt.Errorf("扣款过大，请核对")
+	}
+	wage = computeAmountCents(q, unitPriceCents)
+	total = wage + subsidyCents - deductCents
+	if total < 0 {
+		return 0, 0, fmt.Errorf("扣款大于工钱，请改用借支或结算调整项记录")
+	}
+	return wage, total, nil
+}
+
+// payStatusOf 结算单付款状态：只由服务端算，前端不自己判。
+// payable ≤ 0 的结算单（借支倒挂）没有「待付」可言，一律视为已结清。
+func payStatusOf(payableCents, paidCents int64) string {
+	if payableCents <= 0 || paidCents >= payableCents {
+		return PayStatusPaid
+	}
+	if paidCents <= 0 {
+		return PayStatusUnpaid
+	}
+	return PayStatusPartial
+}
+
 // computeAmountCents 金额（分）= 数量 × 单价（分），四舍五入。
 // 用 big.Rat 精确计算后取整，不再经过 float64，避免大金额丢分/溢出。
+// 记工金额请走 recordAmountCents；本函数只做「数量 × 单价」这一段纯乘法。
 func computeAmountCents(q *big.Rat, unitPriceCents int64) int64 {
 	total := new(big.Rat).Mul(q, new(big.Rat).SetInt64(unitPriceCents))
 	s := total.FloatString(0) // 四舍五入，0.5 向远离零方向

@@ -6,15 +6,19 @@
       </template>
     </PageHeader>
 
-    <!-- 筛选 -->
-    <div class="surface rounded-2xl p-3 flex flex-wrap gap-2">
-      <SelectMenu v-model="filterWorker" :options="workerFilterOptions" class="!py-2 text-sm" @change="load" />
-      <input type="date" v-model="filterStart" class="input-field !w-auto !py-2 text-sm" @change="load" />
-      <span class="self-center text-muted-foreground text-sm">至</span>
-      <input type="date" v-model="filterEnd" class="input-field !w-auto !py-2 text-sm" @change="load" />
-      <div class="flex-1"></div>
-      <div class="self-center text-sm text-muted-foreground">
-        筛选合计：<span class="font-bold text-foreground tabular-nums">{{ fmtMoney(filteredTotal) }}</span>
+    <!-- 筛选：一行两个下拉（工人 / 工地），日期与合计一行，手机端不挤成一堆 -->
+    <div class="surface rounded-2xl p-2.5 sm:p-3 space-y-2">
+      <div class="flex items-center gap-2">
+        <SelectMenu v-model="filterWorker" :options="workerFilterOptions" class="min-w-0 flex-1 sm:flex-none sm:w-44 !py-2 text-sm" @change="reload" />
+        <SelectMenu v-model="filterProject" :options="projectFilterOptions" class="min-w-0 flex-1 sm:flex-none sm:w-44 !py-2 text-sm" @change="reload" />
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <input type="date" v-model="filterStart" class="input-field !w-auto !py-2 text-sm min-w-0 flex-1" @change="reload" />
+        <span class="shrink-0 text-muted-foreground text-sm">至</span>
+        <input type="date" v-model="filterEnd" class="input-field !w-auto !py-2 text-sm min-w-0 flex-1" @change="reload" />
+        <div class="self-center text-sm text-muted-foreground sm:ml-auto">
+          筛选合计：<span class="font-bold text-foreground tabular-nums">{{ fmtMoney(filteredTotal) }}</span>
+        </div>
       </div>
     </div>
 
@@ -31,7 +35,11 @@
                 {{ a.settlement_id ? '已结算' : '未结算' }}
               </span>
             </div>
-            <div class="text-xs text-muted-foreground mt-0.5">{{ a.date }}<span v-if="a.note"> · {{ a.note }}</span></div>
+            <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
+              <span>{{ a.date }}</span>
+              <span v-if="a.project_name" class="badge bg-teal-400/15 text-teal-600 dark:text-teal-400 !px-1.5 !py-0 text-[10px]">🏗 {{ a.project_name }}</span>
+              <span v-if="a.note">{{ a.note }}</span>
+            </div>
           </div>
           <div class="text-right shrink-0 flex items-center gap-2">
             <span class="font-bold text-red-500 tabular-nums">-{{ fmtMoney(a.amount_cents) }}</span>
@@ -48,9 +56,17 @@
 
     <Modal v-model="formOpen" title="记借支">
       <div class="space-y-4">
-        <div>
-          <label class="text-sm font-medium text-foreground block mb-1.5">工人 *</label>
-          <SelectMenu v-model="form.worker_id" :options="workerFormOptions" class="flex-1" />
+        <div class="grid grid-cols-2 gap-3">
+          <div class="min-w-0">
+            <label class="text-sm font-medium text-foreground block mb-1.5">工人 *</label>
+            <SelectMenu v-model="form.worker_id" :options="workerFormOptions" class="w-full" />
+          </div>
+          <!-- 借支归属工地（v0.6.0）：按项目结算时只抵扣该工地的借支；
+               选「未指定工地」的在按人结算时统一抵扣，不会被扣两次。 -->
+          <div class="min-w-0">
+            <label class="text-sm font-medium text-foreground block mb-1.5">工地（选填）</label>
+            <SelectMenu v-model="projectPick" :options="projectFormOptions" class="w-full" />
+          </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
@@ -95,11 +111,16 @@ import SelectMenu from '../components/SelectMenu.vue'
 import Modal from '../components/Modal.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
-import { listAdvances, createAdvance, deleteAdvance, listWorkers, type Advance, type Worker } from '../api/worklog'
+import {
+  listAdvances, createAdvance, deleteAdvance, listWorkers, listProjects,
+  type Advance, type Worker, type Project,
+} from '../api/worklog'
 import { fmtMoney, METHOD_LABELS, yuanToCents, todayStr } from '../utils/format'
+import type { ProjectFilter } from '../utils/project-filter'
 
 const items = ref<Advance[]>([])
 const workers = ref<Worker[]>([])
+const projects = ref<Project[]>([])
 // 下拉选项：筛选含「全部工人」空值项，表单含「请选择」空值项
 const workerFilterOptions = computed(() => [
   { value: '', label: '全部工人' },
@@ -109,10 +130,22 @@ const workerFormOptions = computed(() => [
   { value: '', label: '请选择' },
   ...workers.value.map(w => ({ value: w.id as number, label: w.name })),
 ])
+// 工地选项与记工页同口径（'' 全部 / 'none' 未分工地 / 数字 指定工地）；
+// 表单里的「未指定工地」就是 NULL，与 WorkRecord.ProjectID 的语义一致。
+const projectFilterOptions = computed(() => [
+  { value: '', label: '全部工地' },
+  { value: 'none', label: '未分工地' },
+  ...projects.value.map(p => ({ value: p.id as number, label: p.name })),
+])
+const projectFormOptions = computed(() => [
+  { value: '', label: '未指定工地' },
+  ...projects.value.map(p => ({ value: p.id as number, label: p.name })),
+])
 const total = ref(0)
 const page = ref(1)
 const pageSize = 20
 const filterWorker = ref('')
+const filterProject = ref<ProjectFilter>('')
 const filterStart = ref('')
 const filterEnd = ref('')
 const formOpen = ref(false)
@@ -121,14 +154,24 @@ const toastMsg = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const form = ref<Partial<Advance>>({})
 const amountInput = ref('')
+// 弹窗里的工地选择（'' = 未指定工地）；Advance.project_id 是 number|null，
+// 直接绑 SelectMenu 会和它的 string|number 值类型打架，所以单独放一个 ref。
+const projectPick = ref<string | number>('')
 
 const filteredTotal = computed(() => items.value.reduce((s, a) => s + a.amount_cents, 0))
+
+// 筛选条件变了要回到第一页，否则停在第 3 页换筛选会看到空列表
+function reload() {
+  page.value = 1
+  load()
+}
 
 async function load() {
   try {
     const res = await listAdvances({
       page: page.value, page_size: pageSize,
       worker_id: filterWorker.value || undefined,
+      project_id: filterProject.value === '' ? undefined : filterProject.value,
       start: filterStart.value || undefined,
       end: filterEnd.value || undefined,
     })
@@ -142,6 +185,8 @@ async function load() {
 function openForm() {
   form.value = { date: todayStr(), method: 'cash' }
   amountInput.value = ''
+  // 默认跟随当前工地筛选：正盯着某个工地查时，记的借支大概率就属于它
+  projectPick.value = typeof filterProject.value === 'number' ? filterProject.value : ''
   formOpen.value = true
 }
 
@@ -180,6 +225,7 @@ async function save() {
   try {
     await createAdvance({
       worker_id: Number(form.value.worker_id),
+      project_id: projectPick.value === '' ? null : Number(projectPick.value),
       date: form.value.date || todayStr(),
       amount_cents: cents,
       method: form.value.method || 'cash',
@@ -210,8 +256,9 @@ function remove(a: Advance) {
 onMounted(async () => {
   await load()
   try {
-    const res = await listWorkers()
-    if (res.data?.code === 0) workers.value = res.data.data
+    const [w, p] = await Promise.all([listWorkers(), listProjects({ status: 'active' })])
+    if (w.data?.code === 0) workers.value = w.data.data
+    if (p.data?.code === 0) projects.value = p.data.data
   } catch {}
 })
 </script>

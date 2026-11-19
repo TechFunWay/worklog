@@ -28,6 +28,10 @@ func monthRange(year, month int) (string, string) {
 }
 
 // workerMonthly 月度统计的一行。
+//
+// 金额口径（v0.6.0 起）：WorkAmountCents = SUM(amount_cents)，**补贴已并入、扣款已减掉**，
+// 它是全应用唯一的金额真相；SubsidyCents / DeductCents 只是把其中两项拆出来看一眼，
+// 绝不能再往 WorkAmountCents 上加一次（加一次就重复计钱）。
 type workerMonthly struct {
 	WorkerID           uint    `json:"worker_id"`
 	WorkerName         string  `json:"worker_name"`
@@ -35,6 +39,8 @@ type workerMonthly struct {
 	Hours              float64 `json:"hours"`
 	Pieces             float64 `json:"pieces"`
 	WorkAmountCents    int64   `json:"work_amount_cents"`
+	SubsidyCents       int64   `json:"subsidy_cents"`
+	DeductCents        int64   `json:"deduct_cents"`
 	AdvanceCents       int64   `json:"advance_cents"`
 	PayableCents       int64   `json:"payable_cents"`
 	SettledAmountCents int64   `json:"settled_amount_cents"`
@@ -48,6 +54,15 @@ func statsDashboard(db *gorm.DB) gin.HandlerFunc {
 		now := time.Now()
 		start, end := monthRange(now.Year(), int(now.Month()))
 		selfWorker, isWorker := ac.workerScope()
+		// ⚠️ 两个「欠」字头口径，语义完全不同，前端与对账都不许混用、不许相加：
+		//
+		//   unsettled_cents —— 未结算记工：工记了、还没生成工资条（还在「待结算」池子里）。
+		//   due_cents       —— 待付/欠薪：已经出了工资条（已结算），但付款流水没付够，
+		//                      欠的钱留在结算单上，**绝不退回 unsettled 池**
+		//                      （记工已被 settlement_id 锁定，退回会造成同一笔工结两次）。
+		//
+		// 补贴随 amount_cents 一起进 unsettled_cents；due_cents 随结算单的
+		// payable_cents（= 记工 − 借支 + 调整）走，两边都不需要再加一次补贴。
 		var out struct {
 			Month          string `json:"month"`
 			WorkerCount    int64  `json:"worker_count"`
@@ -57,6 +72,8 @@ func statsDashboard(db *gorm.DB) gin.HandlerFunc {
 			UnsettledCount int64  `json:"unsettled_count"`
 			AdvanceCents   int64  `json:"advance_cents"`
 			SettledCents   int64  `json:"settled_cents"`
+			DueCents       int64  `json:"due_cents"`
+			DueCount       int64  `json:"due_count"`
 		}
 		out.Month = start[:7]
 		workerQ := "user_id = ?"
@@ -106,6 +123,24 @@ func statsDashboard(db *gorm.DB) gin.HandlerFunc {
 		}
 		db.Model(&Settlement{}).Where(setQ, setArgs...).
 			Select("COALESCE(SUM(work_amount_cents),0)").Scan(&out.SettledCents)
+
+		// 待付（欠薪）口径：已结算单上「应付 − 已付」的正数部分之和。
+		// 只算正数是刻意的：多付（付款流水打超了）不倒过来冲抵别的单的欠薪，
+		// 负数由「已付」那一列本身去体现；借支倒挂造成的应付 ≤ 0 单子也不算欠薪
+		// —— 与 amount.go 里 payStatusOf 的判定完全一致。
+		// SQL 层一次聚合出金额与笔数，不逐单捞（避免 N+1）。
+		var due struct {
+			Cents int64
+			Cnt   int64
+		}
+		dueSQL := "COALESCE(SUM(CASE WHEN payable_cents > paid_cents THEN payable_cents - paid_cents ELSE 0 END),0) AS cents, " +
+			"COUNT(CASE WHEN payable_cents > paid_cents THEN 1 END) AS cnt"
+		if err := db.Model(&Settlement{}).Where(setQ, setArgs...).Select(dueSQL).Scan(&due).Error; err != nil {
+			response.ErrorInternal(c, "统计失败")
+			return
+		}
+		out.DueCents = due.Cents
+		out.DueCount = due.Cnt
 		response.Success(c, out)
 	}
 }
@@ -139,9 +174,11 @@ func statsMonthly(db *gorm.DB) gin.HandlerFunc {
 			Type     string
 			Total    float64
 			Amount   int64
+			Subsidy  int64
+			Deduct   int64
 		}
 		var sums []typeSum
-		if err := rq.Select("worker_id, type, COALESCE(SUM(CAST(quantity AS REAL)),0) AS total, COALESCE(SUM(amount_cents),0) AS amount").
+		if err := rq.Select("worker_id, type, COALESCE(SUM(CAST(quantity AS REAL)),0) AS total, COALESCE(SUM(amount_cents),0) AS amount, COALESCE(SUM(subsidy_cents),0) AS subsidy, COALESCE(SUM(deduct_cents),0) AS deduct").
 			Group("worker_id, type").Scan(&sums).Error; err != nil {
 			response.ErrorInternal(c, "统计失败")
 			return
@@ -172,7 +209,11 @@ func statsMonthly(db *gorm.DB) gin.HandlerFunc {
 			case TypePiece:
 				row.Pieces += s.Total
 			}
+			// 合计只认 SUM(amount_cents)；补贴/扣款是「从合计里拆出来看」的口径，
+			// 不要再拿去加回 WorkAmountCents。
 			row.WorkAmountCents += s.Amount
+			row.SubsidyCents += s.Subsidy
+			row.DeductCents += s.Deduct
 		}
 		for _, a := range advs {
 			row := byWorker[a.WorkerID]
@@ -246,8 +287,16 @@ func statsRange(db *gorm.DB) gin.HandlerFunc {
 		if workerID != "" {
 			aq = aq.Where("worker_id = ?", workerID)
 		}
-		var workTotal, advanceTotal, recordCount int64
-		buildRecordQ().Select("COALESCE(SUM(amount_cents),0)").Scan(&workTotal)
+		var advanceTotal, recordCount int64
+		// work.Total 是合计真相（已含补贴、已减扣款）；Subsidy / Deduct 只把其中的补贴与扣款
+		// 拆出来看，不参与任何重算 —— 见 models.go 里 WorkRecord 的金额口径注释。
+		// 一次聚合出三个数，别为了拆项多发一条 SUM（同一份数据扫两遍容易在两处写法漂移）。
+		var work struct {
+			Total   int64
+			Subsidy int64
+			Deduct  int64
+		}
+		buildRecordQ().Select("COALESCE(SUM(amount_cents),0) AS total, COALESCE(SUM(subsidy_cents),0) AS subsidy, COALESCE(SUM(deduct_cents),0) AS deduct").Scan(&work)
 		buildRecordQ().Count(&recordCount)
 		aq.Select("COALESCE(SUM(amount_cents),0)").Scan(&advanceTotal)
 
@@ -259,8 +308,10 @@ func statsRange(db *gorm.DB) gin.HandlerFunc {
 		fillRecordNames(db, records)
 		response.Success(c, gin.H{
 			"start": start, "end": end,
-			"work_amount_cents": workTotal, "advance_cents": advanceTotal,
-			"payable_cents": workTotal - advanceTotal, "record_count": recordCount,
+			"work_amount_cents": work.Total, "advance_cents": advanceTotal,
+			"payable_cents": work.Total - advanceTotal, "record_count": recordCount,
+			// 补贴/扣款汇总：work_amount_cents 已包含它们，这里只是拆项展示用。
+			"subsidy_cents": work.Subsidy, "deduct_cents": work.Deduct,
 			"records": records,
 		})
 	}
@@ -277,14 +328,20 @@ func atoiDefault(s string, def int) int {
 }
 
 // attendanceCell 考勤日历的一天。
+//
+// 金额口径（v0.6.0 起）：AmountCents = 当天各笔 SUM(amount_cents)，已含补贴、已减扣款；
+// SubsidyCents / DeductCents 只给「这天为什么和 数量×单价 对不上」一个说法，
+// 不参与重算，前端要显示合计一律用 AmountCents。
 type attendanceCell struct {
-	Date        string  `json:"date"`
-	Days        float64 `json:"days"`
-	Hours       float64 `json:"hours"`
-	Pieces      float64 `json:"pieces"`
-	Rest        bool    `json:"rest"`
-	RecordCount int     `json:"record_count"`
-	AmountCents int64   `json:"amount_cents"`
+	Date         string  `json:"date"`
+	Days         float64 `json:"days"`
+	Hours        float64 `json:"hours"`
+	Pieces       float64 `json:"pieces"`
+	Rest         bool    `json:"rest"`
+	RecordCount  int     `json:"record_count"`
+	AmountCents  int64   `json:"amount_cents"`
+	SubsidyCents int64   `json:"subsidy_cents"`
+	DeductCents  int64   `json:"deduct_cents"`
 }
 
 // statsAttendance 考勤表：某工人某月的每日出勤汇总 + 月度合计。
@@ -323,7 +380,7 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 			var w Worker
 			q := db.Where("user_id = ? AND status = ?", dsUID, "active")
 			if err := q.Order("name ASC").First(&w).Error; err != nil {
-				response.Success(c, gin.H{"worker": nil, "cells": []attendanceCell{}, "days": 0, "hours": 0, "pieces": 0, "rest_count": 0, "amount_cents": 0, "project_id": pf.echoID()})
+				response.Success(c, gin.H{"worker": nil, "cells": []attendanceCell{}, "days": 0, "hours": 0, "pieces": 0, "rest_count": 0, "amount_cents": 0, "subsidy_cents": 0, "deduct_cents": 0, "project_id": pf.echoID()})
 				return
 			}
 			workerID = int(w.ID)
@@ -344,7 +401,7 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 		byDate := map[string]*attendanceCell{}
 		var totalDays, totalHours, totalPieces float64
 		var restCount int
-		var totalAmount int64
+		var totalAmount, totalSubsidy, totalDeduct int64
 		for _, r := range records {
 			cell := byDate[r.Date]
 			if cell == nil {
@@ -352,8 +409,14 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 				byDate[r.Date] = cell
 			}
 			cell.RecordCount++
+			// 合计仍以 amount_cents 为准（补贴/扣款已在写入口并进去）；
+			// 这里只是把补贴、扣款原样带出来，供日历格子解释「为什么和 数量×单价 不等」。
 			cell.AmountCents += r.AmountCents
+			cell.SubsidyCents += r.SubsidyCents
+			cell.DeductCents += r.DeductCents
 			totalAmount += r.AmountCents
+			totalSubsidy += r.SubsidyCents
+			totalDeduct += r.DeductCents
 			if r.Type == TypeRest {
 				cell.Rest = true
 				continue
@@ -387,30 +450,47 @@ func statsAttendance(db *gorm.DB) gin.HandlerFunc {
 			cells = append(cells, *byDate[d])
 		}
 		response.Success(c, gin.H{
-			"worker":       worker,
-			"year":         year,
-			"month":        month,
-			"project_id":   pf.echoID(),
-			"days":         totalDays,
-			"hours":        totalHours,
-			"pieces":       totalPieces,
-			"rest_count":   restCount,
-			"amount_cents": totalAmount,
-			"cells":        cells,
+			"worker":        worker,
+			"year":          year,
+			"month":         month,
+			"project_id":    pf.echoID(),
+			"days":          totalDays,
+			"hours":         totalHours,
+			"pieces":        totalPieces,
+			"rest_count":    restCount,
+			"amount_cents":  totalAmount,
+			"subsidy_cents": totalSubsidy,
+			"deduct_cents":  totalDeduct,
+			"cells":         cells,
 		})
 	}
 }
 
 // projectStatRow 按工地统计的一行：记工笔数、应发工资、借支、净工资与已结算。
 // 收支账（收入/支出）不属于本功能，这里不输出该维度。
+//
+// 金额口径（v0.6.0 起）：
+//   - WorkAmountCents = 该工地 SUM(amount_cents)，补贴已并入、扣款已减掉，
+//     SubsidyCents / DeductCents 只是拆项（老板要看「这个工地补了多少钱」），
+//     **不参与重算**，净额一律以 WorkAmountCents 为准；
+//   - AdvanceCents = 该工地 SUM(amount_cents) 的借支，**只统计 project_id 明确
+//     指向该工地的借支**；未指定工地（project_id IS NULL）的借支不进任何一行，
+//     「未分工地」行的 advance_cents 也保持 0 —— 它与结算口径一致：散借支只在
+//     按人结算时抵扣（见 docs/06 §4.2），塞进「未分工地」行等于凭空造出一个
+//     并不存在的抵扣额度，按项目结算时会被重复扣一次。
 type projectStatRow struct {
 	ProjectID       *uint  `json:"project_id"`
 	ProjectName     string `json:"project_name"`
 	RecordCount     int64  `json:"record_count"`
 	WorkAmountCents int64  `json:"work_amount_cents"`
+	SubsidyCents    int64  `json:"subsidy_cents"`
+	DeductCents     int64  `json:"deduct_cents"`
 	AdvanceCents    int64  `json:"advance_cents"`
 	PayableCents    int64  `json:"payable_cents"`
 	SettledCents    int64  `json:"settled_cents"`
+	// DueCents 该工地已结算但尚未付清的部分（应付 − 已付，只累正数），
+	// 与 unsettled（还没出工资条）是两回事，不能相加解读。
+	DueCents int64 `json:"due_cents"`
 }
 
 // statsByProject 按工地单独统计工资（可限定月份），末行附带「未分工地」与合计。
@@ -428,28 +508,69 @@ func statsByProject(db *gorm.DB) gin.HandlerFunc {
 		}
 		start, end := monthRange(year, month)
 		dateQ := "user_id = ? AND date BETWEEN ? AND ?"
+		// 员工角色只看自己：与 statsMonthly / statsDashboard / statsRange 同一套口径。
+		// 这里原先完全没有 worker 过滤，一名员工调本接口就能看到整个班组的工资分布；
+		// 三条聚合（记工 / 借支 / 结算）必须一起加，加一条就是三套口径打架。
+		// 未绑定工人档案的成员行拿到 sw = 0，`worker_id = 0` 天然查不到任何数据（fail closed），
+		// 与 statsMonthly 的做法保持一致，不需要额外的 403 分支。
+		selfWorker, isWorker := ac.workerScope()
 
 		// 工资与借支按 project_id 分组（SQL 层聚合，避免 N+1）
 		type workSum struct {
 			ProjectID *uint
 			Cnt       int64
 			Amount    int64
+			Subsidy   int64
+			Deduct    int64
+		}
+		workQ := db.Model(&WorkRecord{}).Where(dateQ+" AND status = ?", dsUID, start, end, RecordStatusApproved)
+		if isWorker {
+			workQ = workQ.Where("worker_id = ?", selfWorker)
 		}
 		var workSums []workSum
-		if err := db.Model(&WorkRecord{}).Where(dateQ+" AND status = ?", dsUID, start, end, RecordStatusApproved).
-			Select("project_id, COUNT(*) AS cnt, COALESCE(SUM(amount_cents),0) AS amount").
+		if err := workQ.
+			Select("project_id, COUNT(*) AS cnt, COALESCE(SUM(amount_cents),0) AS amount, COALESCE(SUM(subsidy_cents),0) AS subsidy, COALESCE(SUM(deduct_cents),0) AS deduct").
 			Group("project_id").Scan(&workSums).Error; err != nil {
 			response.ErrorInternal(c, "统计失败")
 			return
 		}
-		// 已结算金额按结算单的项目维度汇总（借支只挂工人，无工地维度，不参与分组）
+		// 借支按 project_id 分组填进 AdvanceCents。
+		//
+		// 这里原本是个**现存真 bug**（docs/06 §2.4-A）：AdvanceCents 声明了、也参与
+		// 「Payable = Work − Advance」赋值，但从头到尾没有任何查询给它赋值，恒为 0，
+		// 于是「按工地统计」的净额虚高（借出去的钱没从应发里扣）。v0.6.0 借支有了
+		// project_id，正好一条 GROUP BY 补上。
+		// WHERE 里带 project_id IS NOT NULL：未指定工地的散借支不属于任何工地，
+		// 由按人结算抵扣（见 projectStatRow 注释），这里计入就会重复扣钱。
+		type advSum struct {
+			ProjectID uint
+			Amount    int64
+		}
+		advQ := db.Model(&Advance{}).Where("user_id = ? AND date BETWEEN ? AND ? AND project_id IS NOT NULL", dsUID, start, end)
+		if isWorker {
+			advQ = advQ.Where("worker_id = ?", selfWorker)
+		}
+		var advSums []advSum
+		if err := advQ.
+			Select("project_id, COALESCE(SUM(amount_cents),0) AS amount").
+			Group("project_id").Scan(&advSums).Error; err != nil {
+			response.ErrorInternal(c, "统计失败")
+			return
+		}
+		// 已结算金额按结算单的项目维度汇总；顺带把该工地「已结算未付清」的待付额
+		// 一并聚合出来（只算 payable > paid 的正数部分）。
 		type setSum struct {
 			ProjectID *uint
 			Amount    int64
+			Due       int64
+		}
+		setQ := db.Model(&Settlement{}).Where("user_id = ? AND settled_at >= ? AND settled_at < ?", dsUID, start+" 00:00:00", monthEndExclusive(year, month))
+		if isWorker {
+			setQ = setQ.Where("worker_id = ?", selfWorker)
 		}
 		var setSums []setSum
-		if err := db.Model(&Settlement{}).Where("user_id = ? AND settled_at >= ? AND settled_at < ?", dsUID, start+" 00:00:00", monthEndExclusive(year, month)).
-			Select("project_id, COALESCE(SUM(work_amount_cents),0) AS amount").
+		if err := setQ.
+			Select("project_id, COALESCE(SUM(work_amount_cents),0) AS amount, COALESCE(SUM(CASE WHEN payable_cents > paid_cents THEN payable_cents - paid_cents ELSE 0 END),0) AS due").
 			Group("project_id").Scan(&setSums).Error; err != nil {
 			response.ErrorInternal(c, "统计失败")
 			return
@@ -474,9 +595,19 @@ func statsByProject(db *gorm.DB) gin.HandlerFunc {
 			row := getRow(s.ProjectID)
 			row.RecordCount += s.Cnt
 			row.WorkAmountCents += s.Amount
+			row.SubsidyCents += s.Subsidy
+			row.DeductCents += s.Deduct
+		}
+		// 借支行可能落在本月没有任何记工的工地上（先借钱后开工），getRow 会补出
+		// 一行 record_count=0、净额为负的真实数据，不能因为「没记工」就丢掉这笔借支。
+		for _, s := range advSums {
+			pid := s.ProjectID
+			getRow(&pid).AdvanceCents += s.Amount
 		}
 		for _, s := range setSums {
-			getRow(s.ProjectID).SettledCents += s.Amount
+			row := getRow(s.ProjectID)
+			row.SettledCents += s.Amount
+			row.DueCents += s.Due
 		}
 
 		// 填充工地名称
@@ -517,9 +648,12 @@ func statsByProject(db *gorm.DB) gin.HandlerFunc {
 		for _, row := range result {
 			total.RecordCount += row.RecordCount
 			total.WorkAmountCents += row.WorkAmountCents
+			total.SubsidyCents += row.SubsidyCents
+			total.DeductCents += row.DeductCents
 			total.AdvanceCents += row.AdvanceCents
 			total.PayableCents += row.PayableCents
 			total.SettledCents += row.SettledCents
+			total.DueCents += row.DueCents
 		}
 		response.Success(c, gin.H{"year": year, "month": month, "start": start, "end": end, "rows": result, "total": total})
 	}

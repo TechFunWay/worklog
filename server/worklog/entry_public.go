@@ -254,7 +254,7 @@ func publicEntrySubmit(db *gorm.DB) gin.HandlerFunc {
 		err = db.Where("user_id = ? AND entry_code_id = ? AND worker_id = ? AND piece_item_id = ? AND date = ? AND quantity = ? AND status <> ? AND created_at >= ?",
 			owner, code.ID, workerID, pieceID, date, qty, RecordStatusRejected, time.Now().Add(-15*time.Second)).First(&dup).Error
 		if err == nil {
-			fillRecordNames(db, []WorkRecord{dup})
+			fillRecordNamesOne(db, &dup)
 			response.Success(c, publicSubmitResult(db, &dup, true, "刚才已提交过，请勿重复点击", dup.Date))
 			return
 		}
@@ -271,15 +271,18 @@ func publicEntrySubmit(db *gorm.DB) gin.HandlerFunc {
 		rec := WorkRecord{
 			UserID: owner, WorkerID: workerID, PieceItemID: &pieceID, ProjectID: code.ProjectID,
 			Date: date, Type: TypePiece, Quantity: qty, UnitPriceCents: price,
-			AmountCents: computeAmountCents(q, price), Note: limitRunes(strings.TrimSpace(in.Note), 80),
-			Status: status, Source: RecordSourceQR, EntryCodeID: &code.ID, EntryCodeName: code.Name,
+			// 免登录报工不涉及补贴/扣款（老板给的钱，工人不能自填），恒 0。
+			WageCents:   computeAmountCents(q, price),
+			AmountCents: computeAmountCents(q, price),
+			Note:        limitRunes(strings.TrimSpace(in.Note), 80),
+			Status:      status, Source: RecordSourceQR, EntryCodeID: &code.ID, EntryCodeName: code.Name,
 			SubmitterName: worker.Name, ReviewedAt: reviewedAt, ReviewNote: reviewNote,
 		}
 		if err := db.Create(&rec).Error; err != nil {
 			response.ErrorInternal(c, "提交失败，请稍后重试")
 			return
 		}
-		fillRecordNames(db, []WorkRecord{rec})
+		fillRecordNamesOne(db, &rec)
 		msg := "已提交，等班组长审核"
 		if status == RecordStatusApproved {
 			msg = "已记录"
@@ -679,6 +682,8 @@ func batchCreateRecords(db *gorm.DB) gin.HandlerFunc {
 			records = append(records, WorkRecord{
 				UserID: owner, WorkerID: r.workerID, PieceItemID: &in.PieceItemID, ProjectID: projectID,
 				Date: in.Date, Type: TypePiece, Quantity: r.qty, UnitPriceCents: piece.UnitPriceCents,
+				// 批量报工是整班计件收工，不涉及补贴/扣款：工钱即合计。
+				WageCents:   r.amount,
 				AmountCents: r.amount, Note: note, Status: RecordStatusApproved, Source: RecordSourceBatch,
 				CreatedBy: currentUID(c),
 			})

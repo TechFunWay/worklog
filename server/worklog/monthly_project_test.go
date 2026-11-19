@@ -343,8 +343,10 @@ func TestStatsByProjectNoProject(t *testing.T) {
 	}
 }
 
-// 借支只挂工人、没有工地维度，因此不参与工地分组（按工地的 advance_cents 恒为 0，
-// 净工资 = 应发 − 0），这是 WIP 实现的既定口径，此处用测试钉住防止后续误改。
+// 按工地统计的借支口径（v0.6.0 改口径，同时修掉「advance_cents 恒为 0」的历史缺陷）：
+//   - 指定了工地的借支计入该工地行；
+//   - 未指定工地（project_id IS NULL）的散借支不进任何一行，连「未分工地」行也不计 ——
+//     它只在按人结算时抵扣，塞进任何项目行都会与按人结算重复扣一次钱（docs/06 §4.2）。
 func TestStatsByProjectExcludesAdvances(t *testing.T) {
 	r, _ := setupTest(t)
 	pid := seedProject(t, r, "工地X")
@@ -354,15 +356,31 @@ func TestStatsByProjectExcludesAdvances(t *testing.T) {
 	postDayRecord(t, r, map[string]interface{}{
 		"worker_id": widInt, "project_id": pid, "date": "2026-10-01", "type": "day", "quantity": "1",
 	}, "record with project")
+	// 一笔挂在工地X（应计入本项目行），一笔不挂任何工地（不应进任何行）
+	if _, out := doReq(r, http.MethodPost, "/api/worklog/advances", 1, map[string]interface{}{
+		"worker_id": widInt, "project_id": pid, "date": "2026-10-01", "amount_cents": 4000,
+	}); out["code"].(float64) != 0 {
+		t.Fatalf("挂工地借支失败: %v", out)
+	}
+	if _, out := doReq(r, http.MethodPost, "/api/worklog/advances", 1, map[string]interface{}{
+		"worker_id": widInt, "date": "2026-10-02", "amount_cents": 9000,
+	}); out["code"].(float64) != 0 {
+		t.Fatalf("记散借支失败: %v", out)
+	}
 
 	w, out := doReq(r, http.MethodGet, "/api/worklog/stats/project?year=2026&month=10", 1, nil)
 	data := mustOK(t, w, out, "stats by project")
 	row := rowByName(t, data["rows"].([]interface{}), "工地X")
-	if got := int64(row["advance_cents"].(float64)); got != 0 {
-		t.Fatalf("工地X advance_cents = %d, want 0（借支不按工地分组）", got)
+	if got := int64(row["advance_cents"].(float64)); got != 4000 {
+		t.Fatalf("工地X advance_cents = %d, want 4000（指定工地的借支应计入本项目行）", got)
 	}
-	if got := int64(row["payable_cents"].(float64)); got != 30000 {
-		t.Fatalf("工地X payable_cents = %d, want 30000", got)
+	if got := int64(row["payable_cents"].(float64)); got != 26000 {
+		t.Fatalf("工地X payable_cents = %d, want 26000", got)
+	}
+	// 散借支 9000 一分都不进任何工地行
+	total := data["total"].(map[string]interface{})
+	if got := int64(total["advance_cents"].(float64)); got != 4000 {
+		t.Fatalf("合计 advance_cents = %d, want 4000（未分工地的散借支不得计入任何项目行）", got)
 	}
 }
 

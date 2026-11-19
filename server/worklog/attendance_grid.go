@@ -17,7 +17,24 @@ import (
 )
 
 // attendanceGridTotals 汇总口径，与时间段考勤（attendanceRangeRow）一致；
-// 后三个字段给工资条分项金额用，不参与接口契约的必填项。
+// 后五个字段给工资条分项金额用，不参与接口契约的必填项。
+//
+// ── 金额口径（v0.6.0 起，务必读完再改，错一处就是工资算错）────────────────
+// AmountCents = SUM(amount_cents)，是全应用唯一的金额真相，**补贴已并入、扣款已减掉**。
+//
+// DayAmountCents / HourAmountCents / PieceAmountCents 是把 AmountCents **按记录类型**拆开：
+// 每条记录只落进自己 Type 对应的那一个桶（点工进 Day、点时进 Hour、计件进 Piece；
+// 休息记录在录入侧金额恒为 0，不进任何桶），所以正常情况下
+//
+//	DayAmount + HourAmount + PieceAmount == AmountCents
+//
+// （拿三个桶之和当合计前先确认没有「休息但金额非 0」的历史脏数据，
+// 那种记录只在 AmountCents 里，不在任何桶里。）
+//
+// ⚠️ 一笔补贴挂在它所附属的那条记工上，因此补贴**已经算在**该记录的 Day/Hour/Piece 桶里。
+// 再往分项金额上加一次 SubsidyCents 就是把补贴发两遍；SubsidyCents / DeductCents 只是
+// 横向拆项（「这里面有多少是补贴」），永远不参与重算合计。
+// ─────────────────────────────────────────────────────────────────────────
 type attendanceGridTotals struct {
 	AttendDays       int     `json:"attend_days"`
 	Days             float64 `json:"days"`
@@ -29,6 +46,9 @@ type attendanceGridTotals struct {
 	DayAmountCents   int64   `json:"day_amount_cents,omitempty"`
 	HourAmountCents  int64   `json:"hour_amount_cents,omitempty"`
 	PieceAmountCents int64   `json:"piece_amount_cents,omitempty"`
+	// SubsidyCents / DeductCents：AmountCents 之中「补贴」与「扣款」占了多少，拆项用，勿相加。
+	SubsidyCents int64 `json:"subsidy_cents,omitempty"`
+	DeductCents  int64 `json:"deduct_cents,omitempty"`
 }
 
 func (t *attendanceGridTotals) add(o attendanceGridTotals) {
@@ -42,18 +62,25 @@ func (t *attendanceGridTotals) add(o attendanceGridTotals) {
 	t.DayAmountCents += o.DayAmountCents
 	t.HourAmountCents += o.HourAmountCents
 	t.PieceAmountCents += o.PieceAmountCents
+	t.SubsidyCents += o.SubsidyCents
+	t.DeductCents += o.DeductCents
 }
 
 // attendanceGridCell 某工人某天的考勤聚合（同一天多条记录合并）。
+//
+// 金额口径同 attendanceGridTotals：AmountCents 当天应得合计（已含补贴、已减扣款），
+// SubsidyCents / DeductCents 只是把它里面两项拆出来给逐日明细与对工用，不许再加一次。
 type attendanceGridCell struct {
-	Date        string   `json:"date"`
-	Days        float64  `json:"days"`
-	Hours       float64  `json:"hours"`
-	Pieces      float64  `json:"pieces"`
-	Rest        bool     `json:"rest"`
-	AmountCents int64    `json:"amount_cents"`
-	RecordCount int      `json:"record_count"`
-	Notes       []string `json:"notes,omitempty"`
+	Date         string   `json:"date"`
+	Days         float64  `json:"days"`
+	Hours        float64  `json:"hours"`
+	Pieces       float64  `json:"pieces"`
+	Rest         bool     `json:"rest"`
+	AmountCents  int64    `json:"amount_cents"`
+	RecordCount  int      `json:"record_count"`
+	SubsidyCents int64    `json:"subsidy_cents,omitempty"`
+	DeductCents  int64    `json:"deduct_cents,omitempty"`
+	Notes        []string `json:"notes,omitempty"`
 }
 
 type attendanceGridWorker struct {
@@ -100,6 +127,8 @@ type attendanceGridAgg struct {
 	dayAmountCents      int64
 	hourAmountCents     int64
 	pieceAmountCents    int64
+	subsidyCents        int64
+	deductCents         int64
 	recordCount         int
 	notes               []string
 }
@@ -194,7 +223,11 @@ func buildAttendanceGrid(db *gorm.DB, spec *attendanceExportSpec) (*attendanceGr
 			byDate[r.Date] = cell
 		}
 		cell.recordCount++
+		// 合计只认 amount_cents（补贴已在里面）；subsidy / deduct 另存一份纯拆项，
+		// 供逐日明细与工资条说明「当天为什么和 数量×单价 不一样」，不参与任何相加。
 		cell.amountCents += r.AmountCents
+		cell.subsidyCents += r.SubsidyCents
+		cell.deductCents += r.DeductCents
 		if r.Note != "" {
 			cell.notes = append(cell.notes, r.Note)
 		}
@@ -249,14 +282,16 @@ func buildAttendanceGrid(db *gorm.DB, spec *attendanceExportSpec) (*attendanceGr
 		for _, d := range dates {
 			cell := byDate[d]
 			row.Cells = append(row.Cells, attendanceGridCell{
-				Date:        d,
-				Days:        cell.days,
-				Hours:       cell.hours,
-				Pieces:      cell.pieces,
-				Rest:        cell.rest,
-				AmountCents: cell.amountCents,
-				RecordCount: cell.recordCount,
-				Notes:       cell.notes,
+				Date:         d,
+				Days:         cell.days,
+				Hours:        cell.hours,
+				Pieces:       cell.pieces,
+				Rest:         cell.rest,
+				AmountCents:  cell.amountCents,
+				RecordCount:  cell.recordCount,
+				SubsidyCents: cell.subsidyCents,
+				DeductCents:  cell.deductCents,
+				Notes:        cell.notes,
 			})
 			if cell.attend {
 				row.Totals.AttendDays++
@@ -272,6 +307,8 @@ func buildAttendanceGrid(db *gorm.DB, spec *attendanceExportSpec) (*attendanceGr
 			row.Totals.DayAmountCents += cell.dayAmountCents
 			row.Totals.HourAmountCents += cell.hourAmountCents
 			row.Totals.PieceAmountCents += cell.pieceAmountCents
+			row.Totals.SubsidyCents += cell.subsidyCents
+			row.Totals.DeductCents += cell.deductCents
 		}
 		out.Workers = append(out.Workers, row)
 		out.Total.add(row.Totals)

@@ -1,5 +1,9 @@
 import request from './request'
 
+// 补贴/扣款/单价的单笔上限（分）= 100 万元，与服务端 maxSubsidyCents 同口径；
+// 前端先拦一道，别让老板填错后要等服务器报错才发现。
+export const MAX_SUBSIDY_CENTS = 100000000
+
 export interface Worker {
   id?: number
   name: string
@@ -8,6 +12,8 @@ export interface Worker {
   daily_wage_cents?: number
   hourly_wage_cents?: number
   monthly_wage_cents?: number
+  // 档案级默认补贴（分/出勤日，0=未设置）：记工默认补贴四层链的最底一层
+  subsidy_cents?: number
   status?: string
 }
 
@@ -19,6 +25,8 @@ export interface Project {
   // 工地默认单价（分）：0/未设置 = 不启用，记工时回落到工人自身单价
   day_price_cents?: number
   hour_price_cents?: number
+  // 工地默认补贴（分/出勤日，如「饭补 15/天」）：0/未设置 = 不启用
+  subsidy_cents?: number
 }
 
 export interface PieceItem {
@@ -39,6 +47,12 @@ export interface WorkRecord {
   type: 'day' | 'hour' | 'piece' | 'rest'
   quantity: string
   unit_price_cents: number
+  // 纯工钱 = 数量 × 单价（分）。amount_cents 是全应用唯一金额真相，
+  // 补贴与扣款已在服务端并进去：amount_cents = wage + subsidy - deduct。
+  wage_cents?: number
+  subsidy_cents?: number
+  subsidy_note?: string
+  deduct_cents?: number
   amount_cents?: number
   note?: string
   settlement_id?: number | null
@@ -61,11 +75,38 @@ export interface WorkRecord {
 export interface Advance {
   id?: number
   worker_id: number
+  // 选填：借支归属工地。null/未传 = 未指定工地，只在按人结算时抵扣（v0.6.0）
+  project_id?: number | null
   date: string
   amount_cents: number
   method?: string
   note?: string
   settlement_id?: number | null
+  worker_name?: string
+  project_name?: string
+}
+
+// 结算单付款状态（v0.6.0）：unpaid 分文未付 / partial 部分支付 / paid 已付清。
+// 只由服务端按 paid_cents 与 payable_cents 比较得出，前端不自己判。
+export type PayStatus = 'unpaid' | 'partial' | 'paid'
+
+export const PAY_STATUS_LABELS: Record<PayStatus, string> = {
+  unpaid: '未付款',
+  partial: '部分付款',
+  paid: '已付清',
+}
+
+// 结算单的付款流水：一张结算单可分多笔支付（对应后端 SettlementPayment）。
+export interface SettlementPayment {
+  id: number
+  settlement_id: number
+  worker_id: number
+  amount_cents: number
+  method?: string
+  paid_on: string
+  note?: string
+  created_by?: number
+  created_at?: string
   worker_name?: string
 }
 
@@ -79,11 +120,56 @@ export interface Settlement {
   period_end: string
   work_amount_cents: number
   advance_amount_cents: number
+  // 调整项：抹零/迟到扣款为负，额外奖励为正（有符号）；应付 = 应发 − 借支 + 调整
+  adjust_cents?: number
+  adjust_note?: string
   payable_cents: number
+  // 已付 = 本单付款流水之和（服务端事务内 SUM 重算）；尚欠 = 应付 − 已付（派生）
+  paid_cents?: number
+  pay_status?: PayStatus
+  due_cents?: number
+  payment_count?: number
+  // 付款流水：只有详情接口返回
+  payments?: SettlementPayment[]
   record_count: number
   details?: string
   note?: string
   settled_at: string
+}
+
+// 结算单 details JSON 快照里的一行记工（历史快照，字段与记工表同名）。
+// v0.6.0 起工资条要拆项展示，所以快照带 wage/subsidy/deduct；老结算单的快照没有
+// 这几个字段，前端一律按「没有就不显示」处理。
+export interface SettlementDetailRecord {
+  record_id: number
+  date: string
+  type: string
+  type_label: string
+  quantity: string
+  unit_price_cents: number
+  amount_cents: number
+  wage_cents?: number
+  subsidy_cents?: number
+  subsidy_note?: string
+  deduct_cents?: number
+  project_name?: string
+  piece_name?: string
+  piece_unit?: string
+  note?: string
+}
+// 快照里的一行借支：project_name 是 v0.6.0 新增（历史工资条显示当时的工地名）
+export interface SettlementDetailAdvance {
+  advance_id: number
+  date: string
+  amount_cents: number
+  method: string
+  method_label: string
+  project_name?: string
+  note?: string
+}
+export interface SettlementDetails {
+  records: SettlementDetailRecord[]
+  advances: SettlementDetailAdvance[]
 }
 
 export interface DayWorkerRow extends Worker {
@@ -125,17 +211,25 @@ export interface ProjectPriceRow {
   effective_hourly_wage_cents: number
   daily_source: string
   hourly_source: string
+  // 该工人在该工地的默认补贴（分/出勤日）与来源（v0.6.0，与单价同一条覆盖链）
+  subsidy_cents?: number
+  worker_subsidy_cents?: number
+  effective_subsidy_cents?: number
+  subsidy_source?: SubsidySource
 }
 export interface ProjectPricesData {
   project: Project
   project_daily_price_cents: number
   project_hourly_price_cents: number
+  // 工地默认补贴（分/出勤日）；老后端没返回时回落到 project.subsidy_cents
+  project_subsidy_cents?: number
   rows: ProjectPriceRow[]
 }
 export const getProjectPrices = (id: number) => request.get(`/api/worklog/projects/${id}/prices`)
+// rows 三项（日价 / 时价 / 默认补贴）全 0 才删行，只填补贴也算单独覆盖（v0.6.0）。
 export const saveProjectPrices = (
   id: number,
-  rows: { worker_id: number; daily_wage_cents: number; hourly_wage_cents: number }[],
+  rows: { worker_id: number; daily_wage_cents: number; hourly_wage_cents: number; subsidy_cents: number }[],
 ) => request.put(`/api/worklog/projects/${id}/prices`, { rows })
 
 // ---- 计件项目 ----
@@ -155,6 +249,11 @@ export interface RecordInput {
   type: 'day' | 'hour' | 'piece' | 'rest'
   quantity: string
   unit_price_cents?: number
+  // 补贴/扣款（v0.6.0，单位分）：省略或 null = 服务端按默认链带出（扣款不自动带，等价 0）；
+  // 传 0 = 明确不要补贴。员工角色由服务端强制清零，前端不显示输入框。
+  subsidy_cents?: number | null
+  subsidy_note?: string
+  deduct_cents?: number | null
   note?: string
 }
 
@@ -172,6 +271,8 @@ export const deleteRecord = (id: number) => request.delete(`/api/worklog/records
 // 记工自动带价用：按「工地单独价 > 工地默认价 > 工人月薪折算/日薪/时薪」算出该工人
 // 在该工地、该日期的生效价。source 说明价格来自哪一层。
 export type PriceSource = 'project_worker' | 'project' | 'monthly' | 'worker' | 'none'
+// 默认补贴来源：与单价同一条覆盖链，但补贴不按月薪折算，所以没有 monthly 这一层。
+export type SubsidySource = 'project_worker' | 'project' | 'worker' | 'none'
 export interface EffectivePrice {
   worker_id: number
   project_id?: number | null
@@ -185,27 +286,100 @@ export interface EffectivePrice {
   worker_hourly_wage_cents: number
   project_daily_price_cents: number
   project_hourly_price_cents: number
+  // 该工人该工地该日期的默认补贴（分/出勤日）与来源；0 = 没有任何一层设置
+  subsidy_cents: number
+  subsidy_source: SubsidySource
 }
 export const getEffectivePrice = (params: Record<string, unknown>) =>
   request.get('/api/worklog/effective-price', { params })
 
 // ---- 借支 ----
+// projectId（查询参数 project_id）与记工页同语义：不传 = 全部工地、数字 = 指定工地、
+// 'none' = 未分工地（服务端复用 parseProjectFilter）。
 export const listAdvances = (params?: Record<string, unknown>) => request.get('/api/worklog/advances', { params })
 export const createAdvance = (data: Advance) => request.post('/api/worklog/advances', data)
 export const deleteAdvance = (id: number) => request.delete(`/api/worklog/advances/${id}`)
 
 // ---- 结算 ----
 export const unsettledList = (params?: Record<string, unknown>) => request.get('/api/worklog/settlements/unsettled', { params })
+
+// 结算预览（确认弹窗的数据源）：summary 是该工人这段时间的未结算汇总，
+// loose_advance_* 是「未指定工地」的借支，仅在按项目结算时用于提示（v0.6.0）。
+export interface SettlementPreviewSummary extends workerUnsettledRow {
+  loose_advance_count?: number
+  loose_advance_cents?: number
+}
+export interface SettlementPreviewData {
+  summary: SettlementPreviewSummary
+  records: WorkRecord[]
+  advances: Advance[]
+  loose_advance_count?: number
+  loose_advance_cents?: number
+}
 export const settlementPreview = (params: Record<string, unknown>) => request.get('/api/worklog/settlements/preview', { params })
-export const createSettlement = (data: { worker_id: number; start?: string; end?: string; note?: string }) =>
-  request.post('/api/worklog/settlements', data)
+// 预览响应里的「未指定工地借支」笔数：兼容放在顶层与 summary 两种写法。
+export function looseAdvanceCount(data?: SettlementPreviewData | null): number {
+  if (!data) return 0
+  return Number(data.loose_advance_count ?? data.summary?.loose_advance_count ?? 0) || 0
+}
+
+// 结算入参（v0.6.0）：paid_cents 省略 = 全额（与历史行为一致）；
+// adjust_cents 有符号（抹零/罚款为负、奖励为正），仅应付 > 0 时允许分期。
+export interface SettlementInput {
+  worker_id?: number
+  start?: string
+  end?: string
+  note?: string
+  project_id?: number
+  paid_cents?: number | null
+  adjust_cents?: number
+  adjust_note?: string
+}
+export const createSettlement = (data: SettlementInput) => request.post('/api/worklog/settlements', data)
 export const unsettledProjects = () => request.get('/api/worklog/settlements/unsettled-projects')
-export const batchSettlement = (data: { start?: string; end?: string; note?: string; project_id?: number }) =>
-  request.post('/api/worklog/settlements/batch', data)
+export const batchSettlement = (data: SettlementInput) => request.post('/api/worklog/settlements/batch', data)
+// listSettlements 支持 pay_status 筛选：'unpaid' | 'partial' | 'paid'（v0.6.0）
 export const listSettlements = (params?: Record<string, unknown>) => request.get('/api/worklog/settlements', { params })
 export const getSettlement = (id: number) => request.get(`/api/worklog/settlements/${id}`)
 export const updateSettlementNote = (id: number, note: string) => request.put(`/api/worklog/settlements/${id}/note`, { note })
+// 改已结结算单的调整项（仅老板）：服务端按「记工 − 借支 + 调整」重算应付，
+// 已付超过新应付会被拒（message 原样提示即可）。原因上限 60 字。
+export const updateSettlementAdjust = (id: number, data: { adjust_cents: number; adjust_note?: string }) =>
+  request.put(`/api/worklog/settlements/${id}/adjust`, data)
 export const revertSettlement = (id: number) => request.delete(`/api/worklog/settlements/${id}`)
+
+// ---- 结算付款流水（v0.6.0，仅老板可登记/删除）----
+export interface SettlementPaymentInput {
+  amount_cents: number
+  method?: string
+  paid_on: string
+  note?: string
+}
+export const createPayment = (id: number, data: SettlementPaymentInput) =>
+  request.post(`/api/worklog/settlements/${id}/payments`, data)
+export const deletePayment = (id: number, paymentId: number) =>
+  request.delete(`/api/worklog/settlements/${id}/payments/${paymentId}`)
+
+// 待付款（欠薪）明细：欠薪留在结算单上，绝不退回未结算池。
+export interface SettlementDueRow {
+  settlement_id: number
+  settlement_no?: string
+  worker_id: number
+  worker_name: string
+  project_name?: string
+  payable_cents: number
+  paid_cents: number
+  due_cents: number
+  settled_at: string
+  period_start: string
+  period_end: string
+}
+export interface SettlementDueData {
+  rows: SettlementDueRow[]
+  total_due_cents: number
+  count: number
+}
+export const listSettlementDue = () => request.get('/api/worklog/settlements/due')
 
 // ---- 统计 ----
 export interface DashboardStats {
@@ -217,6 +391,9 @@ export interface DashboardStats {
   unsettled_count: number
   advance_cents: number
   settled_cents: number
+  // 已结算未付（欠薪）：与 unsettled 是两回事，不要混算（v0.6.0）
+  due_cents?: number
+  due_count?: number
 }
 
 export interface workerUnsettledRow {
@@ -229,6 +406,23 @@ export interface workerUnsettledRow {
   payable_cents: number
   earliest_date: string
   latest_date: string
+  // 「未指定工地」的借支：按项目结算时不参与本次抵扣，用这两个字段说清去向
+  loose_advance_count?: number
+  loose_advance_cents?: number
+}
+
+// 按项目未结算汇总的一行（GET /settlements/unsettled-projects）。
+// amount_cents = 记工 − 本项目借支；loose_advance_* 只用于提示「按人结算时才抵」。
+export interface UnsettledProjectRow {
+  project_id: number
+  project_name: string
+  worker_count: number
+  record_count: number
+  work_amount_cents: number
+  advance_cents: number
+  amount_cents: number
+  loose_advance_count?: number
+  loose_advance_cents?: number
 }
 
 export interface MonthlyStatRow {

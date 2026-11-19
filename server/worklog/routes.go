@@ -57,9 +57,15 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	g.GET("/settlements/preview", settlementPreview(db))
 	g.POST("/settlements", createSettlement(db))
 	g.POST("/settlements/batch", batchSettlement(db))
+	g.GET("/settlements/due", settlementsDue(db)) // 欠薪看板（必须在 /:id 之前声明）
 	g.GET("/settlements/:id", getSettlement(db))
 	g.PUT("/settlements/:id/note", updateSettlementNote(db))
+	g.PUT("/settlements/:id/adjust", updateSettlementAdjust(db))
 	g.DELETE("/settlements/:id", revertSettlement(db))
+	// 付款流水：工资分几次给（v0.6.0 粉丝反馈「不一定一次性结算完」）
+	g.GET("/settlements/:id/payments", listSettlementPayments(db))
+	g.POST("/settlements/:id/payments", createPayment(db))
+	g.DELETE("/settlements/:id/payments/:pid", deletePayment(db))
 
 	// 统计与考勤
 	g.GET("/stats/dashboard", statsDashboard(db))

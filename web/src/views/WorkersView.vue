@@ -1,6 +1,6 @@
 <template>
   <div class="page-container animate-fade-in">
-    <PageHeader title="工人管理" description="日薪 / 时薪设置后，记工时自动带出">
+    <PageHeader title="工人管理" description="日薪 / 时薪 / 默认补贴设置后，记工时自动带出">
       <template #actions>
         <button class="btn-brand" @click="openForm()">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
@@ -25,6 +25,7 @@
               <span v-if="w.phone">{{ w.phone }} · </span>
               <template v-if="w.monthly_wage_cents">月薪 {{ fmtMoney(w.monthly_wage_cents) }}（按当月天数折算日薪）</template>
               <template v-else>日薪 {{ fmtMoney(w.daily_wage_cents) }} · 时薪 {{ fmtMoney(w.hourly_wage_cents) }}</template>
+              <template v-if="w.subsidy_cents"> · 补贴 {{ fmtMoney(w.subsidy_cents) }}/出勤日</template>
             </div>
             <div v-if="w.note" class="text-xs text-muted-foreground/80 mt-0.5 truncate">{{ w.note }}</div>
           </div>
@@ -49,7 +50,8 @@
             <input v-model="monthlyInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="如 10000" />
             <p class="text-xs text-muted-foreground mt-1">填了月薪的点工按当月天数自动折算日薪</p>
           </div>
-          <div class="grid grid-rows-2 gap-2">
+          <!-- 三格共用右侧这一列：加「默认补贴」不额外长出一整行 -->
+          <div class="grid grid-rows-3 gap-2">
             <div>
               <label class="text-sm font-medium text-foreground block mb-0.5 text-xs">日薪（元）</label>
               <input v-model="dailyInput" type="text" inputmode="decimal" class="input-field tabular-nums !py-1.5" placeholder="0.00" />
@@ -57,6 +59,10 @@
             <div>
               <label class="text-sm font-medium text-foreground block mb-0.5 text-xs">时薪（元）</label>
               <input v-model="hourlyInput" type="text" inputmode="decimal" class="input-field tabular-nums !py-1.5" placeholder="0.00" />
+            </div>
+            <div>
+              <label class="text-sm font-medium text-foreground block mb-0.5 text-xs">默认补贴（元/出勤日）</label>
+              <input v-model="subsidyInput" type="text" inputmode="decimal" class="input-field tabular-nums !py-1.5" placeholder="如 15" />
             </div>
           </div>
         </div>
@@ -86,7 +92,7 @@ import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
-import { listWorkers, createWorker, updateWorker, deleteWorker, type Worker } from '../api/worklog'
+import { listWorkers, createWorker, updateWorker, deleteWorker, MAX_SUBSIDY_CENTS, type Worker } from '../api/worklog'
 import { fmtMoney, yuanToCents, centsToYuanInput } from '../utils/format'
 
 const workers = ref<Worker[]>([])
@@ -98,6 +104,8 @@ const form = ref<Worker>({ name: '' })
 const dailyInput = ref('')
 const hourlyInput = ref('')
 const monthlyInput = ref('')
+// 档案级默认补贴（元/出勤日）：记工满 1 个工时自动带出的那一层
+const subsidyInput = ref('')
 
 async function load() {
   try {
@@ -111,6 +119,7 @@ function openForm(w?: Worker) {
   dailyInput.value = centsToYuanInput(w?.daily_wage_cents)
   hourlyInput.value = centsToYuanInput(w?.hourly_wage_cents)
   monthlyInput.value = centsToYuanInput(w?.monthly_wage_cents)
+  subsidyInput.value = centsToYuanInput(w?.subsidy_cents)
   formOpen.value = true
 }
 
@@ -151,9 +160,11 @@ async function save() {
   const daily = parseCents(dailyInput.value)
   const hourly = parseCents(hourlyInput.value)
   const monthly = parseCents(monthlyInput.value)
-  if (daily === null || hourly === null || monthly === null) return toast('薪资格式不正确', 'error')
+  const subsidy = parseCents(subsidyInput.value)
+  if (daily === null || hourly === null || monthly === null || subsidy === null) return toast('薪资与补贴请填非负数字（最多两位小数）', 'error')
+  if (subsidy > MAX_SUBSIDY_CENTS) return toast('默认补贴过大，上限 100 万元', 'error')
   saving.value = true
-  const payload: Worker = { ...form.value, daily_wage_cents: daily, hourly_wage_cents: hourly, monthly_wage_cents: monthly }
+  const payload: Worker = { ...form.value, daily_wage_cents: daily, hourly_wage_cents: hourly, monthly_wage_cents: monthly, subsidy_cents: subsidy }
   try {
     if (payload.id) await updateWorker(payload.id, payload)
     else await createWorker(payload)

@@ -1,6 +1,6 @@
 <template>
   <div class="page-container animate-fade-in">
-    <PageHeader title="工地管理" description="同时干几个工地？记工时选一下，统计可按工地筛选">
+    <PageHeader title="工地管理" description="记工时选一下工地，统计可按工地筛选；工地默认单价与补贴会自动带出">
       <template #actions>
         <button class="btn-brand" @click="openForm()">添加工地</button>
       </template>
@@ -24,6 +24,7 @@
                 默认单价：<template v-if="p.day_price_cents">日工 ¥{{ fmtYuanShort(p.day_price_cents) }}/个工</template>
                 <template v-if="p.day_price_cents && p.hour_price_cents"> · </template>
                 <template v-if="p.hour_price_cents">小时 ¥{{ fmtYuanShort(p.hour_price_cents) }}/小时</template>
+                <template v-if="p.subsidy_cents">{{ p.day_price_cents || p.hour_price_cents ? ' · ' : '' }}补贴 ¥{{ fmtYuanShort(p.subsidy_cents) }}/出勤日</template>
               </div>
             </div>
             <div class="flex gap-1.5 shrink-0">
@@ -50,6 +51,7 @@
                   默认单价：<template v-if="p.day_price_cents">日工 ¥{{ fmtYuanShort(p.day_price_cents) }}/个工</template>
                   <template v-if="p.day_price_cents && p.hour_price_cents"> · </template>
                   <template v-if="p.hour_price_cents">小时 ¥{{ fmtYuanShort(p.hour_price_cents) }}/小时</template>
+                  <template v-if="p.subsidy_cents">{{ p.day_price_cents || p.hour_price_cents ? ' · ' : '' }}补贴 ¥{{ fmtYuanShort(p.subsidy_cents) }}/出勤日</template>
                 </div>
               </div>
             </div>
@@ -74,17 +76,23 @@
           <label class="text-sm font-medium text-foreground block mb-1.5">备注</label>
           <input v-model="form.note" class="input-field" placeholder="选填" />
         </div>
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label class="text-sm font-medium text-foreground block mb-1.5">默认日工单价（元/个工）</label>
-            <input v-model="dayPriceInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="留空 = 按工人单价" />
+        <!-- 三项默认价同属一个栅格：手机端一行两列（三框两行，比原来一列三行更矮），
+             宽屏一行三列；单位写在下方一行说明里，避免标签在手机端被折行撑高。 -->
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div class="min-w-0">
+            <label class="text-sm font-medium text-foreground block mb-1.5">日工单价（元）</label>
+            <input v-model="dayPriceInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="留空 = 不设置" />
           </div>
-          <div>
-            <label class="text-sm font-medium text-foreground block mb-1.5">默认小时单价（元/小时）</label>
-            <input v-model="hourPriceInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="留空 = 按工人单价" />
+          <div class="min-w-0">
+            <label class="text-sm font-medium text-foreground block mb-1.5">小时单价（元）</label>
+            <input v-model="hourPriceInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="留空 = 不设置" />
+          </div>
+          <div class="min-w-0">
+            <label class="text-sm font-medium text-foreground block mb-1.5">默认补贴（元）</label>
+            <input v-model="subsidyInput" type="text" inputmode="decimal" class="input-field tabular-nums" placeholder="如 15" />
           </div>
         </div>
-        <p class="text-xs text-muted-foreground">留空或填 0 表示不设置，记工时按工人自身日薪/时薪（月薪工按当月天数折算）。</p>
+        <p class="text-xs text-muted-foreground">留空或填 0 表示不设置：单价按工人自身日薪/时薪（月薪工按当月天数折算），补贴不带。补贴按「出勤日」计，与数量无关，半天班默认不带、需要时记工里手动加。</p>
         <div class="flex gap-3">
           <button type="button" class="btn-ghost min-h-11 flex-1" @click="closeForm">取消</button>
           <button type="button" class="btn-brand min-h-11 flex-1" :disabled="saving" @click="save">保存</button>
@@ -106,7 +114,7 @@ import Modal from '../components/Modal.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import ProjectPricesModal from '../components/ProjectPricesModal.vue'
 import Toast from '../components/Toast.vue'
-import { listProjects, createProject, updateProject, deleteProject, type Project } from '../api/worklog'
+import { listProjects, createProject, updateProject, deleteProject, MAX_SUBSIDY_CENTS, type Project } from '../api/worklog'
 import { centsToYuanInput, fmtYuanShort, yuanToCents } from '../utils/format'
 
 const projects = ref<Project[]>([])
@@ -115,9 +123,10 @@ const saving = ref(false)
 const toastMsg = ref('')
 const toastType = ref<'success' | 'error'>('success')
 const form = ref<Project>({ name: '' })
-// 默认单价输入框：元为单位，留空/0 = 不设置
+// 默认单价与默认补贴输入框：元为单位，留空/0 = 不设置
 const dayPriceInput = ref('')
 const hourPriceInput = ref('')
+const subsidyInput = ref('')
 
 // 工人单价弹窗（逐工人在本工地的覆盖价）
 const pricesOpen = ref(false)
@@ -131,13 +140,14 @@ async function load() {
 }
 
 function hasDefaultPrice(p: Project): boolean {
-  return !!(p.day_price_cents || p.hour_price_cents)
+  return !!(p.day_price_cents || p.hour_price_cents || p.subsidy_cents)
 }
 
 function openForm(p?: Project) {
   form.value = p ? { ...p } : { name: '', status: 'active' }
   dayPriceInput.value = centsToYuanInput(p?.day_price_cents)
   hourPriceInput.value = centsToYuanInput(p?.hour_price_cents)
+  subsidyInput.value = centsToYuanInput(p?.subsidy_cents)
   formOpen.value = true
 }
 
@@ -186,7 +196,11 @@ async function save() {
   if (dayCents === null) return toast('默认日工单价格式不正确，请填非负数字', 'error')
   const hourCents = parsePrice(hourPriceInput.value)
   if (hourCents === null) return toast('默认小时单价格式不正确，请填非负数字', 'error')
-  const payload: Project = { ...form.value, day_price_cents: dayCents, hour_price_cents: hourCents }
+  const subsidyCents = parsePrice(subsidyInput.value)
+  if (subsidyCents === null) return toast('默认补贴格式不正确，请填非负数字（最多两位小数）', 'error')
+  if (subsidyCents > MAX_SUBSIDY_CENTS) return toast('默认补贴过大，单笔上限 100 万元', 'error')
+  // 三项一起提交：该页是整对象 PUT，漏字段会把已设的值清掉
+  const payload: Project = { ...form.value, day_price_cents: dayCents, hour_price_cents: hourCents, subsidy_cents: subsidyCents }
   saving.value = true
   try {
     if (payload.id) await updateProject(payload.id, payload)

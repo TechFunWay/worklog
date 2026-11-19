@@ -36,7 +36,9 @@ func exportRecordsCSV(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		fillRecordNames(db, records)
-		rows := [][]string{{"日期", "工人", "类型", "数量", "单价(元)", "金额(元)", "工地", "计件项目", "状态", "备注"}}
+		// 列序约定（v0.6.0）：既有列一律不动，「工钱 / 补贴 / 扣款」追加在末尾，
+		// 免得下游按列位取数的 Excel 模板错位。「金额(元)」仍是该笔应得合计 = 工钱 + 补贴 − 扣款。
+		rows := [][]string{{"日期", "工人", "类型", "数量", "单价(元)", "金额(元)", "工地", "计件项目", "状态", "备注", "工钱(元)", "补贴(元)", "扣款(元)"}}
 		for _, r := range records {
 			status := "未结算"
 			if r.SettlementID != nil {
@@ -46,6 +48,7 @@ func exportRecordsCSV(db *gorm.DB) gin.HandlerFunc {
 				r.Date, r.WorkerName, typeLabels[r.Type], r.Quantity,
 				centsToYuanString(r.UnitPriceCents), centsToYuanString(r.AmountCents),
 				r.ProjectName, pieceLabel(r), status, r.Note,
+				centsToYuanString(r.WageCents), centsToYuanString(r.SubsidyCents), centsToYuanString(r.DeductCents),
 			})
 		}
 		writeCSV(c, utils.ExportFilename("记工明细", "csv"), rows)
@@ -74,12 +77,15 @@ func exportMonthlyCSV(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		fillRecordNames(db, records)
-		rows := [][]string{{"工人", "日期", "类型", "数量", "单价(元)", "金额(元)", "工地", "计件项目", "备注"}}
+		// 「金额(元)」= 该笔应得合计（已含补贴、已减扣款）；「工钱(元)」才是 数量 × 单价。
+		// 拆出来的三列一律追加在末尾，老模板按列位取数不受影响。
+		rows := [][]string{{"工人", "日期", "类型", "数量", "单价(元)", "金额(元)", "工地", "计件项目", "备注", "工钱(元)", "补贴(元)", "扣款(元)"}}
 		for _, r := range records {
 			rows = append(rows, []string{
 				r.WorkerName, r.Date, typeLabels[r.Type], r.Quantity,
 				centsToYuanString(r.UnitPriceCents), centsToYuanString(r.AmountCents),
 				r.ProjectName, pieceLabel(r), r.Note,
+				centsToYuanString(r.WageCents), centsToYuanString(r.SubsidyCents), centsToYuanString(r.DeductCents),
 			})
 		}
 		writeCSV(c, utils.ExportFilename(fmt.Sprintf("工资月报-%d-%02d", year, month), "csv"), rows)
@@ -204,10 +210,14 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 		}
 
 		// 工人 + 日期 聚合
+		// amountCents 是当天应得合计（补贴已并入、扣款已减掉），subsidyCents / deductCents
+		// 只用来解释「当天工资为什么和 数量×单价 对不上」，不参与重算。
 		type dayAgg struct {
 			days, hours, pieces float64
 			rest                bool
 			amountCents         int64
+			subsidyCents        int64
+			deductCents         int64
 			notes               []string
 		}
 		agg := make(map[uint]map[string]*dayAgg, len(workers))
@@ -223,6 +233,8 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 				byDate[r.Date] = cell
 			}
 			cell.amountCents += r.AmountCents
+			cell.subsidyCents += r.SubsidyCents
+			cell.deductCents += r.DeductCents
 			if r.Type == TypeRest {
 				cell.rest = true
 			} else {
@@ -241,7 +253,9 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 			}
 		}
 
-		rows := [][]string{{"工人", "日期", "点工(天)", "点时(小时)", "计件(数量)", "休息", "金额(元)", "备注"}}
+		// 「金额(元)」= 当天应得合计（已含补贴、已减扣款）；补贴/扣款两列追加在末尾，
+		// 让工人能自己把「数量 × 单价 ≠ 金额」这件事对上账。既有列序不变。
+		rows := [][]string{{"工人", "日期", "点工(天)", "点时(小时)", "计件(数量)", "休息", "金额(元)", "备注", "补贴(元)", "扣款(元)"}}
 		for _, w := range workers {
 			byDate := agg[w.ID]
 			dates := make([]string, 0, len(byDate))
@@ -252,7 +266,7 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 
 			var totalDays, totalHours, totalPieces float64
 			var totalRest int
-			var totalAmount int64
+			var totalAmount, totalSubsidy, totalDeduct int64
 			for _, d := range dates {
 				cell := byDate[d]
 				restMark := ""
@@ -263,17 +277,22 @@ func exportAttendanceCSV(db *gorm.DB) gin.HandlerFunc {
 				rows = append(rows, []string{
 					w.Name, d, trimFloat(cell.days), trimFloat(cell.hours), trimFloat(cell.pieces),
 					restMark, centsToYuanString(cell.amountCents), strings.Join(cell.notes, "；"),
+					centsToYuanString(cell.subsidyCents), centsToYuanString(cell.deductCents),
 				})
 				totalDays += cell.days
 				totalHours += cell.hours
 				totalPieces += cell.pieces
 				totalAmount += cell.amountCents
+				totalSubsidy += cell.subsidyCents
+				totalDeduct += cell.deductCents
 			}
 			// 每人一行合计，没有记录的人也列出 0，考勤表才能覆盖全部在职工人。
+			// 合计行的补贴/扣款同样只作拆项展示，金额列已经是含补贴的应得合计。
 			rows = append(rows, []string{
 				w.Name, "合计", trimFloat(totalDays), trimFloat(totalHours),
 				trimFloat(totalPieces), fmt.Sprintf("%d", totalRest),
 				centsToYuanString(totalAmount), "",
+				centsToYuanString(totalSubsidy), centsToYuanString(totalDeduct),
 			})
 		}
 		writeCSV(c, utils.ExportFilename(name, "csv"), rows)
@@ -325,13 +344,16 @@ func exportReconcileCSV(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 
+		// 表头与既有列序不动；「工钱 / 补贴 / 扣款 / 补贴说明」追加在末尾。
+		// 金额(元) 是应得合计（含补贴、已减扣款），工人拿「数量 × 单价」乘不出来时
+		// 看这四列就能对上账 —— 契约里「明细行含补贴要说清楚」的导出侧落点。
 		rows := [][]string{
 			{"对工单"},
 			{"工人", res.Worker.Name},
 			{"期间", res.Start + " 至 " + res.End},
 			{"工地", res.ProjectName},
 			{},
-			{"日期", "类型", "数量", "单价(元)", "金额(元)", "工地", "计件项目", "备注"},
+			{"日期", "类型", "数量", "单价(元)", "金额(元)", "工地", "计件项目", "备注", "工钱(元)", "补贴(元)", "扣款(元)", "补贴说明"},
 		}
 		for _, it := range res.Items {
 			quantity := it.Quantity
@@ -343,11 +365,19 @@ func exportReconcileCSV(db *gorm.DB) gin.HandlerFunc {
 				it.Date, it.TypeLabel, quantity,
 				centsToYuanString(it.UnitPriceCents), centsToYuanString(it.AmountCents),
 				it.ProjectName, piece, it.Note,
+				centsToYuanString(it.WageCents), centsToYuanString(it.SubsidyCents),
+				centsToYuanString(it.DeductCents), it.SubsidyNote,
 			})
 		}
 		summary := fmt.Sprintf("点工 %s 天；计时 %s 小时；计件 %s；休息 %d 天",
 			trimFloat(res.Days), trimFloat(res.Hours), trimFloat(res.Pieces), res.RestCount)
-		rows = append(rows, []string{"合计", "", summary, "", centsToYuanString(res.AmountCents), "", "", ""})
+		// 有补贴/扣款时在合计行里写明白，别让工人以为金额算错了（金额为 0 的行不写，避免噪音）。
+		if res.SubsidyCents != 0 || res.DeductCents != 0 {
+			summary += fmt.Sprintf("；其中补贴 %s 元、扣款 %s 元（金额 = 工钱 + 补贴 − 扣款）",
+				centsToYuanString(res.SubsidyCents), centsToYuanString(res.DeductCents))
+		}
+		rows = append(rows, []string{"合计", "", summary, "", centsToYuanString(res.AmountCents), "", "", "",
+			centsToYuanString(res.WageCents), centsToYuanString(res.SubsidyCents), centsToYuanString(res.DeductCents), ""})
 		writeCSV(c, utils.ExportFilename(fmt.Sprintf("对工单-%s-%s至%s", res.Worker.Name, start, end), "csv"), rows)
 	}
 }
@@ -377,13 +407,16 @@ func exportAdvancesCSV(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		fillAdvanceNames(db, items)
-		rows := [][]string{{"日期", "工人", "金额(元)", "方式", "状态", "备注"}}
+		// 「工地」列追加在末尾（v0.6.0 借支可选工地）：未指定工地时留空，
+		// 这类散借支只在按人结算时抵扣，不参与按项目结算（docs/06 §4.2）。
+		// 注意工地名是用户录入内容，必须和其他文本列一样过公式注入防护。
+		rows := [][]string{{"日期", "工人", "金额(元)", "方式", "状态", "备注", "工地"}}
 		for _, a := range items {
 			status := "未结算"
 			if a.SettlementID != nil {
 				status = "已结算"
 			}
-			rows = append(rows, []string{a.Date, a.WorkerName, centsToYuanString(a.AmountCents), methodLabels[a.Method], status, a.Note})
+			rows = append(rows, []string{a.Date, a.WorkerName, centsToYuanString(a.AmountCents), methodLabels[a.Method], status, a.Note, a.ProjectName})
 		}
 		writeCSV(c, utils.ExportFilename("借支记录", "csv"), rows)
 	}
@@ -402,17 +435,36 @@ func exportSettlementsCSV(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorInternal(c, "导出失败")
 			return
 		}
-		rows := [][]string{{"结算单号", "工人", "期间起", "期间止", "应发(元)", "借支(元)", "实发(元)", "记工条数", "结算时间", "备注"}}
+		// 调整项 / 已付 / 尚欠 / 付款状态四列一律追加在末尾（既有列序不动）。
+		// 口径：实发(元) = 应发 − 借支 + 调整项；尚欠 = max(实发 − 已付, 0)，
+		// 与 settlement.go 里 DueCents 的派生规则逐字一致（多付不倒挂成负欠薪，
+		// 打超了多少由「已付」列自己大于「实发」体现）。付款状态出中文标签。
+		rows := [][]string{
+			{"结算单号", "工人", "期间起", "期间止", "应发(元)", "借支(元)", "实发(元)", "记工条数", "结算时间", "备注", "调整项(元)", "调整原因", "已付(元)", "尚欠(元)", "付款状态"},
+		}
 		for _, s := range items {
 			rows = append(rows, []string{
 				fmt.Sprintf("JS%06d", s.ID), s.WorkerName, s.PeriodStart, s.PeriodEnd,
 				centsToYuanString(s.WorkAmountCents), centsToYuanString(s.AdvanceAmountCents),
 				centsToYuanString(s.PayableCents), fmt.Sprintf("%d", s.RecordCount),
 				s.SettledAt.Format("2006-01-02 15:04"), s.Note,
+				centsToYuanString(s.AdjustCents), s.AdjustNote,
+				centsToYuanString(s.PaidCents), centsToYuanString(settlementDueCents(s.PayableCents, s.PaidCents)),
+				csvPayStatusLabel(s.PayStatus, s.PayableCents, s.PaidCents),
 			})
 		}
 		writeCSV(c, utils.ExportFilename("结算记录", "csv"), rows)
 	}
+}
+
+// settlementDueCents 结算单尚欠（分）：应付 − 已付，只取正数部分。
+// 与 settlement.go 给 DueCents 赋值的规则一致：多付不倒挂成「负欠薪」，
+// 打超多少由「已付」列自己大于「实发」体现。导出与网页必须同一套数，否则对不上账。
+func settlementDueCents(payableCents, paidCents int64) int64 {
+	if payableCents <= paidCents {
+		return 0
+	}
+	return payableCents - paidCents
 }
 
 // exportJSON 导出当前用户全部业务数据（JSON 包）。
@@ -428,6 +480,12 @@ func exportJSON(db *gorm.DB) gin.HandlerFunc {
 		var records []WorkRecord
 		var advances []Advance
 		var settlements []Settlement
+		// payments（结算单付款流水，v0.6.0）必须一起导出：
+		// 少这一张表，用户「导出备份 → 换机恢复」后结算单上的已付金额就没了来源，
+		// 工资条会从「已付清」倒退回「欠薪」，属于会把人坑到真金白银的缺数据。
+		// 初始化成空切片：没有流水时导出 "payments": []，与既有各键的形态一致，
+		// 免得下游把 null 当「没导出」而不敢覆盖。
+		payments := make([]SettlementPayment, 0)
 
 		wq := db.Where("user_id = ?", uid)
 		if isWorker {
@@ -478,6 +536,15 @@ func exportJSON(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorInternal(c, "导出失败")
 			return
 		}
+		// 付款流水同样按数据集归属过滤；员工只看自己那几笔（SettlementPayment 冗余了 worker_id）。
+		payq := db.Where("user_id = ?", uid)
+		if isWorker {
+			payq = payq.Where("worker_id = ?", sw)
+		}
+		if err := payq.Order("paid_on ASC, id ASC").Find(&payments).Error; err != nil {
+			response.ErrorInternal(c, "导出失败")
+			return
+		}
 		data := gin.H{
 			"app":            "worklog",
 			"exported_at":    time.Now().Format(time.RFC3339),
@@ -488,6 +555,7 @@ func exportJSON(db *gorm.DB) gin.HandlerFunc {
 			"records":        records,
 			"advances":       advances,
 			"settlements":    settlements,
+			"payments":       payments,
 		}
 		if err := utils.WriteJSONFile(c, utils.ExportFilename("工记数据备份", "json"), data); err != nil {
 			response.ErrorInternal(c, "导出失败")

@@ -34,6 +34,14 @@ export function yuanToCents(input: string): number | null {
   return Math.round(parseFloat(s) * 100)
 }
 
+// 带符号的元金额 → 分：结算「调整项」用（抹零/罚款为负、奖励为正）。
+// 与 yuanToCents 一样只做一次乘除取整，避免小数累积误差；无效返回 null。
+export function signedYuanToCents(input: string): number | null {
+  const s = (input ?? '').trim().replace(/[¥,，\s]/g, '')
+  if (!/^[+-]?\d+(\.\d{1,2})?$/.test(s)) return null
+  return Math.round(parseFloat(s) * 100)
+}
+
 export function centsToYuanInput(cents: number | undefined | null): string {
   if (cents === undefined || cents === null || cents === 0) return ''
   return (cents / 100).toFixed(2)

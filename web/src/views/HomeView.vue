@@ -46,6 +46,21 @@
         <div class="text-lg sm:text-2xl font-extrabold text-foreground mt-1.5 sm:mt-2 font-display tabular-nums leading-tight">{{ card.value }}</div>
         <div v-if="card.sub" class="text-xs text-muted-foreground mt-0.5 sm:mt-1">{{ card.sub }}</div>
       </div>
+
+      <!-- 待付款 = 已结算但没付清（欠薪），与上面「待结算」（还没算账）是两回事，
+           两个数不能混，所以标题与颜色都分开；手机端占满一行，宽屏是第五张卡。 -->
+      <RouterLink
+        v-if="!isWorker && dueCents > 0"
+        to="/admin/settlements?tab=due"
+        class="surface rounded-2xl col-span-2 xl:col-span-1 p-3 sm:p-5 flex items-center justify-between gap-2 hover:-translate-y-0.5 transition-transform"
+      >
+        <span class="min-w-0">
+          <span class="block whitespace-nowrap text-xs font-medium text-muted-foreground sm:text-sm">待付款（已结未付清）</span>
+          <span class="mt-1.5 block text-lg font-extrabold leading-tight text-red-500 tabular-nums font-display sm:mt-2 sm:text-2xl">{{ fmtMoney(dueCents) }}</span>
+          <span class="mt-0.5 block text-xs text-muted-foreground">{{ dueCount }} 笔 · 点开登记付款 →</span>
+        </span>
+        <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-red-400/15 text-sm text-red-500 sm:h-9 sm:w-9 sm:text-lg">💰</span>
+      </RouterLink>
     </div>
 
     <!-- 未结算提醒 -->
@@ -127,6 +142,10 @@ const statCards = computed(() => [
   { label: isWorker.value ? '我的借支' : '借支中', value: fmtMoney(stats.value.advance_cents), icon: '💸', bg: 'bg-red-400/15 text-red-500', sub: '未结算借支' },
   { label: isWorker.value ? '累计已结工资' : '累计已结', value: fmtMoney(stats.value.settled_cents), icon: '✅', bg: 'bg-emerald-400/15 text-emerald-500', sub: '历史结算合计' },
 ])
+
+// 待付款指标（v0.6.0）：老后端没这两个字段时不显示这张卡
+const dueCents = computed(() => stats.value.due_cents ?? 0)
+const dueCount = computed(() => stats.value.due_count ?? 0)
 
 const quickActions = computed(() => isWorker.value
   ? [

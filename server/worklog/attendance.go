@@ -59,6 +59,16 @@ func (f projectFilter) apply(q *gorm.DB) *gorm.DB {
 	return q.Where("project_id = ?", f.id)
 }
 
+// onlyID 只在「筛选指定某个工地」时返回该工地 id，其余（全部 / 未分工地）返回 0。
+// 给那些「NULL 不等于未分工地」的表用（例如 settlements：按人结算出来的工资单
+// project_id 为空，却可能包含任意工地的工，套 apply() 的 IS NULL 会误伤）。
+func (f projectFilter) onlyID() uint {
+	if f.enabled && !f.none {
+		return f.id
+	}
+	return 0
+}
+
 // echoID 返回给前端的 project_id 回显：指定工地时是 id，全部/未分工地时为 null。
 func (f projectFilter) echoID() *uint {
 	if !f.enabled || f.none {
@@ -111,16 +121,21 @@ func parseDateRange(c *gin.Context) (string, string, bool) {
 }
 
 // attendanceRangeRow 时间段考勤的一行（按工人聚合）。
+//
+// 金额口径（v0.6.0 起）：AmountCents = SUM(amount_cents)，补贴已并入、扣款已减掉；
+// SubsidyCents / DeductCents 只是把合计拆开看，不参与重算（同 attendanceGridTotals）。
 type attendanceRangeRow struct {
-	WorkerID    uint    `json:"worker_id"`
-	WorkerName  string  `json:"worker_name"`
-	AttendDays  int     `json:"attend_days"` // 有非休息记录的自然日数
-	Days        float64 `json:"days"`        // 点工数量合计（折合工数）
-	Hours       float64 `json:"hours"`
-	Pieces      float64 `json:"pieces"`
-	RestCount   int     `json:"rest_count"` // 有休息记录的自然日数
-	AmountCents int64   `json:"amount_cents"`
-	RecordCount int64   `json:"record_count"`
+	WorkerID     uint    `json:"worker_id"`
+	WorkerName   string  `json:"worker_name"`
+	AttendDays   int     `json:"attend_days"` // 有非休息记录的自然日数
+	Days         float64 `json:"days"`        // 点工数量合计（折合工数）
+	Hours        float64 `json:"hours"`
+	Pieces       float64 `json:"pieces"`
+	RestCount    int     `json:"rest_count"` // 有休息记录的自然日数
+	AmountCents  int64   `json:"amount_cents"`
+	RecordCount  int64   `json:"record_count"`
+	SubsidyCents int64   `json:"subsidy_cents"`
+	DeductCents  int64   `json:"deduct_cents"`
 }
 
 // statsAttendanceRange 时间段考勤：按工人返回出勤天数、点工/计时/计件、休息与工钱。
@@ -195,10 +210,12 @@ func statsAttendanceRange(db *gorm.DB) gin.HandlerFunc {
 			Total    float64
 			Amount   int64
 			Cnt      int64
+			Subsidy  int64
+			Deduct   int64
 		}
 		var sums []typeSum
 		if err := buildRecordQ().
-			Select("worker_id, type, COALESCE(SUM(CAST(quantity AS REAL)),0) AS total, COALESCE(SUM(amount_cents),0) AS amount, COUNT(*) AS cnt").
+			Select("worker_id, type, COALESCE(SUM(CAST(quantity AS REAL)),0) AS total, COALESCE(SUM(amount_cents),0) AS amount, COUNT(*) AS cnt, COALESCE(SUM(subsidy_cents),0) AS subsidy, COALESCE(SUM(deduct_cents),0) AS deduct").
 			Group("worker_id, type").Scan(&sums).Error; err != nil {
 			response.ErrorInternal(c, "查询失败")
 			return
@@ -238,6 +255,8 @@ func statsAttendanceRange(db *gorm.DB) gin.HandlerFunc {
 				row.Pieces += s.Total
 			}
 			row.AmountCents += s.Amount
+			row.SubsidyCents += s.Subsidy
+			row.DeductCents += s.Deduct
 			row.RecordCount += s.Cnt
 		}
 		for _, d := range attendRows {
@@ -262,6 +281,8 @@ func statsAttendanceRange(db *gorm.DB) gin.HandlerFunc {
 			total.Pieces += row.Pieces
 			total.RestCount += row.RestCount
 			total.AmountCents += row.AmountCents
+			total.SubsidyCents += row.SubsidyCents
+			total.DeductCents += row.DeductCents
 			total.RecordCount += row.RecordCount
 		}
 		// 指定单个工人时也按姓名排序（单行无影响）；全部工人按姓名/档案号稳定排序。
@@ -288,6 +309,11 @@ func statsAttendanceRange(db *gorm.DB) gin.HandlerFunc {
 }
 
 // reconcileItem 对工单里的一条记工明细。
+//
+// 金额口径（v0.6.0 起）：AmountCents = 该笔应得合计 = 工钱 + 补贴 − 扣款，
+// 所以「数量 × 单价 = 金额」这条等式**只在没有补贴与扣款时**成立。
+// WageCents / SubsidyCents / DeductCents 与 SubsidyNote 就是为了让对工单能把这点
+// 差额摆在明面上（粉丝原话：别让工人对不上账），它们是拆项，不再往 AmountCents 上加。
 type reconcileItem struct {
 	ID             uint   `json:"id"`
 	Date           string `json:"date"`
@@ -295,6 +321,10 @@ type reconcileItem struct {
 	TypeLabel      string `json:"type_label"`
 	Quantity       string `json:"quantity"`
 	UnitPriceCents int64  `json:"unit_price_cents"`
+	WageCents      int64  `json:"wage_cents"`
+	SubsidyCents   int64  `json:"subsidy_cents"`
+	SubsidyNote    string `json:"subsidy_note"`
+	DeductCents    int64  `json:"deduct_cents"`
 	AmountCents    int64  `json:"amount_cents"`
 	ProjectName    string `json:"project_name"`
 	PieceName      string `json:"piece_name"`
@@ -306,20 +336,25 @@ type reconcileItem struct {
 // reconcileResult 对工单数据：工人 + 期间 + 工地 + 合计 + 逐条明细。
 // JSON 接口与 CSV 导出共用同一份计算结果，保证两处数字一致。
 type reconcileResult struct {
-	Worker      Worker          `json:"worker"`
-	Start       string          `json:"start"`
-	End         string          `json:"end"`
-	ProjectID   *uint           `json:"project_id"`
-	ProjectName string          `json:"project_name"`
-	AttendDays  int             `json:"attend_days"`
-	Days        float64         `json:"days"`
-	Hours       float64         `json:"hours"`
-	Pieces      float64         `json:"pieces"`
-	RestCount   int             `json:"rest_count"`
-	AmountCents int64           `json:"amount_cents"`
-	RecordCount int             `json:"record_count"`
-	Items       []reconcileItem `json:"items"`
-	GeneratedAt string          `json:"generated_at"`
+	Worker      Worker  `json:"worker"`
+	Start       string  `json:"start"`
+	End         string  `json:"end"`
+	ProjectID   *uint   `json:"project_id"`
+	ProjectName string  `json:"project_name"`
+	AttendDays  int     `json:"attend_days"`
+	Days        float64 `json:"days"`
+	Hours       float64 `json:"hours"`
+	Pieces      float64 `json:"pieces"`
+	RestCount   int     `json:"rest_count"`
+	AmountCents int64   `json:"amount_cents"`
+	RecordCount int     `json:"record_count"`
+	// WageCents / SubsidyCents / DeductCents：AmountCents 的拆项（工资 / 补贴 / 扣款），
+	// 满足 WageCents + SubsidyCents − DeductCents == AmountCents；对工文本要把补贴说清楚时读这三个。
+	WageCents    int64           `json:"wage_cents"`
+	SubsidyCents int64           `json:"subsidy_cents"`
+	DeductCents  int64           `json:"deduct_cents"`
+	Items        []reconcileItem `json:"items"`
+	GeneratedAt  string          `json:"generated_at"`
 }
 
 // buildReconcile 计算某个工人在指定期间/工地下的对工单。
@@ -366,6 +401,10 @@ func buildReconcile(db *gorm.DB, dsUID, workerID uint, start, end string, pf pro
 			TypeLabel:      label,
 			Quantity:       r.Quantity,
 			UnitPriceCents: r.UnitPriceCents,
+			WageCents:      r.WageCents,
+			SubsidyCents:   r.SubsidyCents,
+			SubsidyNote:    r.SubsidyNote,
+			DeductCents:    r.DeductCents,
 			AmountCents:    r.AmountCents,
 			ProjectName:    r.ProjectName,
 			PieceName:      r.PieceName,
@@ -373,7 +412,12 @@ func buildReconcile(db *gorm.DB, dsUID, workerID uint, start, end string, pf pro
 			Note:           r.Note,
 			Rest:           rest,
 		})
+		// 合计仍然只累 amount_cents；下面三行是拆项，加起来不等于合计是设计如此
+		// （补贴与扣款已经在 amount_cents 里进出了）。
 		res.AmountCents += r.AmountCents
+		res.WageCents += r.WageCents
+		res.SubsidyCents += r.SubsidyCents
+		res.DeductCents += r.DeductCents
 		res.RecordCount++
 		if rest {
 			restDates[r.Date] = true
