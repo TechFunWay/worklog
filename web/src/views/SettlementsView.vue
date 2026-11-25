@@ -67,7 +67,10 @@
                 {{ row.worker_name.charAt(0) }}
               </div>
               <div class="min-w-0 flex-1">
-                <div class="font-semibold text-foreground">{{ row.worker_name }}</div>
+                <div class="flex items-center gap-1.5 min-w-0">
+                  <span class="font-semibold text-foreground truncate">{{ row.worker_name }}</span>
+                  <span v-if="row.worker_no" class="badge bg-brand-500/10 text-brand-600 dark:text-brand-400 !px-1.5 !py-0 text-[10px] shrink-0">{{ row.worker_no }}</span>
+                </div>
                 <div class="text-xs text-muted-foreground mt-0.5">
                   {{ row.record_count }} 笔记工（{{ row.earliest_date }} ~ {{ row.latest_date }}）
                   <template v-if="row.advance_count > 0">· 借支 {{ row.advance_count }} 笔</template>
@@ -136,6 +139,7 @@
         <input type="date" v-model="sFilterEnd" class="input-field !w-auto !py-2 text-sm" @change="sPage = 1; loadSettled()" />
         <div class="flex-1"></div>
         <button type="button" class="btn-ghost !py-2 text-xs" :disabled="exporting" @click="exportSettlements">导出 CSV</button>
+        <button v-if="isBoss" type="button" class="btn-ghost !py-2 text-xs" :disabled="exporting" @click="exportPayroll">导出工资表(含卡号)</button>
       </div>
 
       <div class="surface rounded-2xl overflow-hidden">
@@ -144,7 +148,10 @@
           <RouterLink v-for="s in settled" :key="s.id" :to="`/admin/settlements/${s.id}`" class="p-3 sm:p-4 flex items-center gap-2.5 sm:gap-3 hover:bg-muted/50">
             <span class="w-10 h-10 rounded-xl bg-emerald-400/15 text-emerald-500 flex items-center justify-center text-lg shrink-0">✅</span>
             <div class="min-w-0 flex-1">
-              <div class="font-semibold text-foreground">{{ s.worker_name }}</div>
+              <div class="flex items-center gap-1.5 min-w-0">
+                <span class="font-semibold text-foreground truncate">{{ s.worker_name }}</span>
+                <span v-if="s.worker_no" class="badge bg-brand-500/10 text-brand-600 dark:text-brand-400 !px-1.5 !py-0 text-[10px] shrink-0">{{ s.worker_no }}</span>
+              </div>
               <div class="text-xs text-muted-foreground mt-0.5">
                 单号 JS{{ String(s.id).padStart(6, '0') }} · {{ s.period_start }} ~ {{ s.period_end }} · {{ s.record_count }} 笔
               </div>
@@ -513,6 +520,21 @@ async function exportSettlements() {
   } finally {
     exporting.value = false
   }
+}
+
+// 工资表（含银行卡/身份证明文）：仅老板可导出，导出前明确提示敏感信息。
+function exportPayroll() {
+  askConfirm('导出工资表（含银行卡）', '该文件包含工人的银行卡号与身份证号，仅用于工资代发。请妥善保管，用完及时删除，不要外传。确定导出？', async () => {
+    exporting.value = true
+    try {
+      await downloadExport('settlements.csv', { with_pii: 1 })
+      toast('已开始下载工资表')
+    } catch (e: any) {
+      toast(e.response?.data?.message || '导出失败，请稍后重试', 'error')
+    } finally {
+      exporting.value = false
+    }
+  }, { text: '导出' })
 }
 
 function toast(msg: string, type: 'success' | 'error' = 'success') {

@@ -439,21 +439,49 @@ func exportSettlementsCSV(db *gorm.DB) gin.HandlerFunc {
 		// 口径：实发(元) = 应发 − 借支 + 调整项；尚欠 = max(实发 − 已付, 0)，
 		// 与 settlement.go 里 DueCents 的派生规则逐字一致（多付不倒挂成负欠薪，
 		// 打超了多少由「已付」列自己大于「实发」体现）。付款状态出中文标签。
-		rows := [][]string{
-			{"结算单号", "工人", "期间起", "期间止", "应发(元)", "借支(元)", "实发(元)", "记工条数", "结算时间", "备注", "调整项(元)", "调整原因", "已付(元)", "尚欠(元)", "付款状态"},
+		// with_pii=1：供「工资表代发」使用，出银行卡与身份证明文；只有老板能要，
+		// 其余情况一律不给敏感信息。工号与开户行不敏感，始终导出。
+		withPII := c.Query("with_pii") == "1" && ac.isBoss()
+		wmap := map[uint]Worker{}
+		if len(items) > 0 {
+			wids := make([]uint, 0, len(items))
+			for _, s := range items {
+				wids = append(wids, s.WorkerID)
+			}
+			var ws []Worker
+			db.Where("id IN ?", wids).Find(&ws)
+			for _, w := range ws {
+				wmap[w.ID] = w
+			}
 		}
+		head := []string{"结算单号", "工人", "工号", "期间起", "期间止", "应发(元)", "借支(元)", "实发(元)", "记工条数", "结算时间", "备注", "调整项(元)", "调整原因", "已付(元)", "尚欠(元)", "付款状态", "开户行"}
+		if withPII {
+			head = append(head, "银行卡号", "身份证号")
+		}
+		rows := [][]string{head}
 		for _, s := range items {
-			rows = append(rows, []string{
-				fmt.Sprintf("JS%06d", s.ID), s.WorkerName, s.PeriodStart, s.PeriodEnd,
+			w := wmap[s.WorkerID]
+			row := []string{
+				fmt.Sprintf("JS%06d", s.ID), s.WorkerName, w.WorkerNo, s.PeriodStart, s.PeriodEnd,
 				centsToYuanString(s.WorkAmountCents), centsToYuanString(s.AdvanceAmountCents),
 				centsToYuanString(s.PayableCents), fmt.Sprintf("%d", s.RecordCount),
 				s.SettledAt.Format("2006-01-02 15:04"), s.Note,
 				centsToYuanString(s.AdjustCents), s.AdjustNote,
 				centsToYuanString(s.PaidCents), centsToYuanString(settlementDueCents(s.PayableCents, s.PaidCents)),
-				csvPayStatusLabel(s.PayStatus, s.PayableCents, s.PaidCents),
-			})
+				csvPayStatusLabel(s.PayStatus, s.PayableCents, s.PaidCents), w.BankName,
+			}
+			if withPII {
+				bank, _ := piiDecrypt(db, w.BankCardEnc)
+				idc, _ := piiDecrypt(db, w.IDCardEnc)
+				row = append(row, bank, idc)
+			}
+			rows = append(rows, row)
 		}
-		writeCSV(c, utils.ExportFilename("结算记录", "csv"), rows)
+		name := "结算记录"
+		if withPII {
+			name = "工资表(含银行卡)"
+		}
+		writeCSV(c, utils.ExportFilename(name, "csv"), rows)
 	}
 }
 

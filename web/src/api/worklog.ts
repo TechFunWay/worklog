@@ -14,6 +14,17 @@ export interface Worker {
   monthly_wage_cents?: number
   // 档案级默认补贴（分/出勤日，0=未设置）：记工默认补贴四层链的最底一层
   subsidy_cents?: number
+  // 工号（选填）：同姓名工人靠它区分，会显示在记工页与工资条
+  worker_no?: string
+  // 开户行（选填，明文）
+  bank_name?: string
+  // 身份证 / 银行卡：明文只在提交时上行；下行一律是掩码 + 是否已填写
+  id_card?: string
+  bank_card?: string
+  id_card_masked?: string
+  bank_card_masked?: string
+  id_card_set?: boolean
+  bank_card_set?: boolean
   status?: string
 }
 
@@ -114,6 +125,8 @@ export interface Settlement {
   id: number
   worker_id: number
   worker_name: string
+  // 工号（选填）：同姓名工人区分用
+  worker_no?: string
   project_id?: number | null
   project_name?: string
   period_start: string
@@ -189,6 +202,9 @@ export const listWorkers = (params?: Record<string, unknown>) => request.get('/a
 export const createWorker = (data: Worker) => request.post('/api/worklog/workers', data)
 export const updateWorker = (id: number, data: Worker) => request.put(`/api/worklog/workers/${id}`, data)
 export const deleteWorker = (id: number) => request.delete(`/api/worklog/workers/${id}`)
+// 敏感信息（身份证/银行卡）完整值：仅老板可调用，列表接口只给掩码。
+export interface WorkerPII { worker_no?: string; id_card?: string; bank_card?: string; bank_name?: string }
+export const getWorkerPII = (id: number) => request.get(`/api/worklog/workers/${id}/pii`)
 
 // ---- 工地 ----
 export const listProjects = (params?: Record<string, unknown>) => request.get('/api/worklog/projects', { params })
@@ -399,6 +415,7 @@ export interface DashboardStats {
 export interface workerUnsettledRow {
   worker_id: number
   worker_name: string
+  worker_no?: string
   record_count: number
   work_amount_cents: number
   advance_count: number
@@ -496,6 +513,14 @@ export async function downloadExport(path: string, params?: Record<string, unkno
   // 返回实际下载文件名：各页面用它提示「文件在浏览器『下载』文件夹」。
   return filename
 }
+
+// ---- 定时导出与目录选择（v0.6.1）----
+export interface FsDirEntry { name: string; path: string }
+export interface FsListData { path: string; parent?: string; roots: string[]; dirs: FsDirEntry[] }
+export const fsList = (path?: string) => request.get('/api/worklog/fs/list', { params: path ? { path } : undefined })
+export const fsMkdir = (path: string, name: string) => request.post('/api/worklog/fs/mkdir', { path, name })
+export const runAutoExportNow = (scope?: string) =>
+  request.post('/api/worklog/auto-export/run', null, { params: scope ? { scope } : undefined })
 
 // ---- NAS 导出 ----
 // 把考勤表（Excel / 图片）保存到服务端导出目录，管理员可在「系统配置 → 导出目录」

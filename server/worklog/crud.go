@@ -73,13 +73,14 @@ func listWorkers(db *gorm.DB) gin.HandlerFunc {
 		}
 		if kw := strings.TrimSpace(c.Query("keyword")); kw != "" {
 			like := "%" + kw + "%"
-			q = q.Where("name LIKE ? OR phone LIKE ?", like, like)
+			q = q.Where("name LIKE ? OR phone LIKE ? OR worker_no LIKE ?", like, like, like)
 		}
 		var items []Worker
 		if err := q.Order("status ASC, name ASC").Find(&items).Error; err != nil {
 			response.ErrorInternal(c, "查询失败")
 			return
 		}
+		fillWorkerPIIMasks(db, items)
 		response.Success(c, items)
 	}
 }
@@ -114,6 +115,32 @@ func createWorker(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorBadRequest(c, "默认补贴数值过大，请核对")
 			return
 		}
+		in.WorkerNo = strings.TrimSpace(in.WorkerNo)
+		if len([]rune(in.WorkerNo)) > 20 {
+			response.ErrorBadRequest(c, "工号请控制在 20 个字符以内")
+			return
+		}
+		if err := validateIDCard(in.IDCard); err != nil {
+			response.ErrorBadRequest(c, err.Error())
+			return
+		}
+		if err := validateBankCard(in.BankCard); err != nil {
+			response.ErrorBadRequest(c, err.Error())
+			return
+		}
+		encID, err := piiEncrypt(db, in.IDCard)
+		if err != nil {
+			response.ErrorInternal(c, "敏感信息加密失败")
+			return
+		}
+		encBank, err := piiEncrypt(db, normalizeBankCard(in.BankCard))
+		if err != nil {
+			response.ErrorInternal(c, "敏感信息加密失败")
+			return
+		}
+		in.IDCardEnc, in.BankCardEnc = encID, encBank
+		in.IDCard, in.BankCard = "", ""
+		in.BankName = strings.TrimSpace(in.BankName)
 		if in.Status == "" {
 			in.Status = "active"
 		}
@@ -125,7 +152,10 @@ func createWorker(db *gorm.DB) gin.HandlerFunc {
 			response.ErrorInternal(c, "保存失败")
 			return
 		}
-		response.Success(c, in)
+		// 回显掩码与「已填写」标记，前端不用再请求一次（明文绝不下发）。
+		out := []Worker{in}
+		fillWorkerPIIMasks(db, out)
+		response.Success(c, out[0])
 	}
 }
 
@@ -170,6 +200,34 @@ func updateWorker(db *gorm.DB) gin.HandlerFunc {
 		item.HourlyWageCents = in.HourlyWageCents
 		item.MonthlyWageCents = in.MonthlyWageCents
 		item.SubsidyCents = in.SubsidyCents
+		item.WorkerNo = strings.TrimSpace(in.WorkerNo)
+		if len([]rune(item.WorkerNo)) > 20 {
+			response.ErrorBadRequest(c, "工号请控制在 20 个字符以内")
+			return
+		}
+		item.BankName = strings.TrimSpace(in.BankName)
+		// 身份证/银行卡只允许老板改：组长编辑工人档案时不传这两个字段，避免误清空。
+		if ac.isBoss() {
+			if err := validateIDCard(in.IDCard); err != nil {
+				response.ErrorBadRequest(c, err.Error())
+				return
+			}
+			if err := validateBankCard(in.BankCard); err != nil {
+				response.ErrorBadRequest(c, err.Error())
+				return
+			}
+			encID, err := piiEncrypt(db, in.IDCard)
+			if err != nil {
+				response.ErrorInternal(c, "敏感信息加密失败")
+				return
+			}
+			encBank, err := piiEncrypt(db, normalizeBankCard(in.BankCard))
+			if err != nil {
+				response.ErrorInternal(c, "敏感信息加密失败")
+				return
+			}
+			item.IDCardEnc, item.BankCardEnc = encID, encBank
+		}
 		if in.Status == "active" || in.Status == "archived" {
 			item.Status = in.Status
 		}
@@ -178,6 +236,33 @@ func updateWorker(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		response.Success(c, item)
+	}
+}
+
+// workerPII 返回某工人身份证/银行卡的完整值（仅老板/管理员）。
+//
+// 列表接口只给掩码，编辑回填与「工资表代发」导出才需要明文，所以单独开一个
+// 显式接口：调用即留痕于访问日志（框架审计），且只对老板开放。
+func workerPII(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ac := loadAccess(db, currentUID(c))
+		if !ac.isBoss() {
+			forbidden(c)
+			return
+		}
+		var w Worker
+		if err := db.Where("user_id = ? AND id = ?", ac.scopeUser(), c.Param("id")).First(&w).Error; err != nil {
+			notFound(c, "工人不存在")
+			return
+		}
+		idCard, _ := piiDecrypt(db, w.IDCardEnc)
+		bankCard, _ := piiDecrypt(db, w.BankCardEnc)
+		response.Success(c, gin.H{
+			"worker_no": w.WorkerNo,
+			"id_card":   idCard,
+			"bank_card": bankCard,
+			"bank_name": w.BankName,
+		})
 	}
 }
 

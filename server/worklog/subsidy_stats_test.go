@@ -395,13 +395,14 @@ func TestCSVExportColumns(t *testing.T) {
 	// 结算：付款状态中文；负数调整项不能被转义成 "'-5.00"
 	w, _ = doReq(r, http.MethodGet, "/api/worklog/export/settlements.csv", 1, nil)
 	lines := subCSVLines(w.Body.String())
-	if got, want := lines[0], "结算单号,工人,期间起,期间止,应发(元),借支(元),实发(元),记工条数,结算时间,备注,调整项(元),调整原因,已付(元),尚欠(元),付款状态"; got != want {
+	// 工号与开户行是 v0.6.1 新增的两列（在「工人」后与末尾）；敏感列（银行卡/身份证）默认不导出。
+	if got, want := lines[0], "结算单号,工人,工号,期间起,期间止,应发(元),借支(元),实发(元),记工条数,结算时间,备注,调整项(元),调整原因,已付(元),尚欠(元),付款状态,开户行"; got != want {
 		t.Fatalf("结算 CSV 表头错位：\n got %q\nwant %q", got, want)
 	}
 	if len(lines) < 2 {
 		t.Fatalf("结算 CSV 没有数据行：%v", lines)
 	}
-	if !strings.Contains(lines[1], ",-5.00,抹零+迟到扣款,400.00,495.00,部分支付") {
+	if !strings.Contains(lines[1], ",-5.00,抹零+迟到扣款,400.00,495.00,部分支付,") {
 		t.Fatalf("结算 CSV 数据行的调整/已付/尚欠/付款状态不对：%q", lines[1])
 	}
 	if strings.Contains(lines[1], "'-5.00") {

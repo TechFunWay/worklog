@@ -21,10 +21,25 @@ type Worker struct {
 	MonthlyWageCents int64  `json:"monthly_wage_cents"`
 	// SubsidyCents 档案级默认补贴（分/出勤日，0=未设置）。记工时按
 	// 「手填 > 工地单独 > 工地默认 > 工人档案」带出，可单条改或清零。
-	SubsidyCents int64     `json:"subsidy_cents"`
-	Status       string    `gorm:"default:active;index" json:"status"` // active / archived
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	SubsidyCents int64 `json:"subsidy_cents"`
+	// WorkerNo 工号（选填）：同姓名工人靠它区分，会带到记工页、工资条与导出。
+	WorkerNo string `gorm:"index" json:"worker_no"`
+	// BankName 开户行（选填，明文；只有卡号才需要加密）。
+	BankName string `json:"bank_name"`
+	// 身份证号与银行卡号属敏感信息：加密落库，接口只下发掩码。
+	IDCardEnc   string `json:"-"`
+	BankCardEnc string `json:"-"`
+	// 仅入参：新建/编辑时传明文，服务端加密后写上面的 Enc 列。
+	IDCard   string `gorm:"-" json:"id_card,omitempty"`
+	BankCard string `gorm:"-" json:"bank_card,omitempty"`
+	// 仅出参：掩码与「是否已填写」，避免前端拿到密文或明文。
+	IDCardMasked   string    `gorm:"-" json:"id_card_masked,omitempty"`
+	BankCardMasked string    `gorm:"-" json:"bank_card_masked,omitempty"`
+	IDCardSet      bool      `gorm:"-" json:"id_card_set"`
+	BankCardSet    bool      `gorm:"-" json:"bank_card_set"`
+	Status         string    `gorm:"default:active;index" json:"status"` // active / archived
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Project 工地/项目（选填维度）。DayPriceCents/HourPriceCents 是工地默认单价
@@ -228,6 +243,7 @@ type Settlement struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// 展示字段（接口层派生/联查填充，不落库，避免双写不一致）
+	WorkerNo     string              `gorm:"-" json:"worker_no"` // 同姓名工人靠工号区分
 	DueCents     int64               `gorm:"-" json:"due_cents"`
 	PaymentCount int                 `gorm:"-" json:"payment_count"`
 	Payments     []SettlementPayment `gorm:"-" json:"payments,omitempty"`

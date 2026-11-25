@@ -40,9 +40,19 @@
         </div>
         <button class="btn-ghost !px-2.5 !py-1.5 sm:!px-3 sm:!py-2 shrink-0" @click="shiftDays(7)">›</button>
         <input type="date" class="input-field !w-36 !py-1.5 !px-2 text-sm shrink-0 hidden sm:block" v-model="selectedDate" />
+        <!-- 翻页翻远了、选中日已不在可见范围时给一条回程路。桌面放本行，手机放下方日期行，
+             避免在 390 宽里再挤窄日期条。 -->
+        <button v-if="selectionOutOfWindow" type="button"
+                class="hidden sm:inline-flex shrink-0 items-center rounded-lg border border-brand-500/40 bg-brand-500/10 px-2.5 py-1.5 text-xs font-semibold text-brand-600 dark:text-brand-400 whitespace-nowrap"
+                aria-label="回到选中日期"
+                @click="backToSelected">回到选中日</button>
       </div>
-      <div class="sm:hidden mt-2">
-        <input type="date" class="input-field !py-1.5 text-sm" v-model="selectedDate" />
+      <div class="sm:hidden mt-2 flex items-center gap-2">
+        <input type="date" class="input-field !py-1.5 text-sm flex-1 min-w-0" v-model="selectedDate" />
+        <button v-if="selectionOutOfWindow" type="button"
+                class="shrink-0 rounded-lg border border-brand-500/40 bg-brand-500/10 px-2.5 py-[7px] text-xs font-semibold text-brand-600 dark:text-brand-400 whitespace-nowrap"
+                aria-label="回到选中日期"
+                @click="backToSelected">回到选中日</button>
       </div>
     </div>
 
@@ -72,6 +82,7 @@
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
                 <span class="font-semibold text-foreground truncate">{{ row.name }}</span>
+                <span v-if="row.worker_no" class="badge bg-brand-500/10 text-brand-600 dark:text-brand-400 !px-1.5 !py-0 text-[10px]">{{ row.worker_no }}</span>
                 <span v-if="row.status === 'archived'" class="badge bg-muted text-muted-foreground">已归档</span>
                 <span v-if="row.pending_count" class="badge bg-amber-400/15 text-amber-600 dark:text-amber-300">待审 {{ row.pending_count }}</span>
                 <span v-if="row.rejected_count" class="badge bg-red-500/10 text-red-500">驳回 {{ row.rejected_count }}</span>
@@ -114,6 +125,7 @@
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-1.5">
                   <span class="font-semibold text-foreground truncate">{{ row.name }}</span>
+                  <span v-if="row.worker_no" class="badge bg-brand-500/10 text-brand-600 dark:text-brand-400 !px-1.5 !py-0 text-[10px]">{{ row.worker_no }}</span>
                   <span v-if="row.status === 'archived'" class="badge bg-muted text-muted-foreground !px-1.5 !py-0 text-[10px]">已归档</span>
                   <span v-if="row.pending_count" class="badge bg-amber-400/15 text-amber-600 dark:text-amber-300 !px-1.5 !py-0 text-[10px]">待审 {{ row.pending_count }}</span>
                   <span v-if="row.rejected_count" class="badge bg-red-500/10 text-red-500 !px-1.5 !py-0 text-[10px]">驳回 {{ row.rejected_count }}</span>
@@ -155,6 +167,12 @@
                   @click="form.type = t.value as any; onTypeChange()">
             <div class="text-lg sm:text-xl leading-tight">{{ t.icon }}</div>{{ t.label }}
           </button>
+        </div>
+
+        <!-- 日期：可选任意一天。粉丝反馈「最上面的日期要能随便选」，这里在弹窗内直接给入口 -->
+        <div v-if="!multiDay || editingId">
+          <label class="text-sm font-medium text-foreground block mb-1.5">日期</label>
+          <input type="date" v-model="selectedDate" class="input-field" />
         </div>
 
         <!-- 月薪工提示：自动折算日薪 + 缺勤扣款口径（只有单价确实来自月薪折算时才提示） -->
@@ -248,17 +266,13 @@
           <input v-model="form.note" type="text" class="input-field" placeholder="如：加班、雨天停工半天" />
         </div>
 
-        <!-- 多天连记 -->
+        <!-- 多天连记：月历多选（按月翻页、标出当天已有记工，跨月也能连选） -->
         <div v-if="!editingId">
-          <button class="text-sm text-brand-600 dark:text-brand-400 font-semibold" @click="multiDay = !multiDay">
+          <button class="text-sm text-brand-600 dark:text-brand-400 font-semibold" @click="toggleMultiDayMode">
             {{ multiDay ? '▾' : '▸' }} 多天连记（同样的工连记多天）
           </button>
-          <div v-if="multiDay" class="grid grid-cols-4 sm:grid-cols-7 gap-1.5 mt-2">
-            <button v-for="d in multiDayOptions" :key="d" class="py-1.5 rounded-lg text-xs font-semibold border transition-all"
-                    :class="multiDays.includes(d) ? 'bg-brand-gradient text-white border-transparent' : 'border-border text-muted-foreground'"
-                    @click="toggleMultiDay(d)">
-              {{ d.slice(5) }}
-            </button>
+          <div v-if="multiDay" class="mt-2">
+            <MonthMultiPicker v-model="multiDays" :worker-id="editingWorker?.id ?? null" />
           </div>
         </div>
 
@@ -330,6 +344,7 @@
     </Modal>
 
     <ConfirmDialog v-model="deleteConfirmOpen" title="删除记录" message="删除后当日合计、月度统计与工资都会同步更新。确定删除这条记录？" confirm-text="删除" confirm-type="danger" @confirm="removeRecord" />
+    <ConfirmDialog v-model="dupOpen" title="这些日期已有记工" :message="dupMessage" confirm-text="仍然记工" @confirm="confirmDupSave" />
 
     <Toast :message="toastMsg" :type="toastType" />
   </div>
@@ -343,8 +358,9 @@ import SelectMenu from '../components/SelectMenu.vue'
 import Modal from '../components/Modal.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
+import MonthMultiPicker from '../components/MonthMultiPicker.vue'
 import {
-  recordsByDate, createRecord, updateRecord, deleteRecord, getEffectivePrice,
+  recordsByDate, createRecord, updateRecord, deleteRecord, getEffectivePrice, getAttendance,
   listWorkers, listProjects, listPieceItems,
   type DayWorkerRow, type WorkRecord, type Project, type PieceItem,
   type EffectivePrice, type PriceSource, type SubsidySource,
@@ -542,18 +558,32 @@ const subsidyHintText = computed(() => {
 
 const multiDay = ref(false)
 const multiDays = ref<string[]>([])
-const multiDayOptions = computed(() => Array.from({ length: 14 }, (_, i) => addDays(selectedDate.value, -i)))
 
-function toggleMultiDay(d: string) {
-  const i = multiDays.value.indexOf(d)
-  if (i >= 0) multiDays.value.splice(i, 1)
-  else multiDays.value.push(d)
+// 打开多天连记时把当前日期预选上，少点一次；关闭时清空，避免残留影响单日记工。
+function toggleMultiDayMode() {
+  multiDay.value = !multiDay.value
+  if (multiDay.value) {
+    if (!multiDays.value.includes(selectedDate.value)) multiDays.value = [selectedDate.value]
+  } else {
+    multiDays.value = []
+  }
 }
 
 const dateOptions = ref<string[]>([])
-function rebuildDateOptions() {
-  const base = selectedDate.value
+
+// 日期窗口 15 天。粉丝反馈：点任何一天，选中日都会被重新摆到正中间、日历跟着左右滚
+// ——根因是每次加载都把窗口「以选中日为圆心」重建。现在窗口只在必要时（首次、或
+// 选中的日期已经不在窗口内）才重建，平时点日期只换高亮，列表不重排、不滚动。
+function rebuildDateOptions(anchor?: string) {
+  const base = anchor || selectedDate.value
   dateOptions.value = Array.from({ length: 15 }, (_, i) => addDays(base, i - 7))
+}
+
+// 保证选中日落在窗口里；已经在窗口内就什么都不做（这是不跳动的前提）。
+function ensureDateInWindow() {
+  if (!dateOptions.value.length || !dateOptions.value.includes(selectedDate.value)) {
+    rebuildDateOptions()
+  }
 }
 
 function dayLabel(d: string) {
@@ -753,7 +783,7 @@ function resolveRecordProjectId(): number | null {
 // 当日数据加载：带工地上下文；seq 丢弃过期响应，快速切日期时不会串数据。
 let dayLoadSeq = 0
 async function loadDay() {
-  rebuildDateOptions()
+  ensureDateInWindow()
   const seq = ++dayLoadSeq
   const pid = projectFilter.value === '' ? undefined : projectFilter.value
   try {
@@ -787,8 +817,36 @@ watch(() => route.query.project, (value) => {
   if (p !== projectFilter.value) projectFilter.value = p
 })
 
+// 选中日是否已被翻出窗口（此时弹出「回到选中日」，否则那一行不留占位）
+const selectionOutOfWindow = computed(() =>
+  dateOptions.value.length > 0 && !dateOptions.value.includes(selectedDate.value),
+)
+
+// 回到选中日：以选中日为圆心重建窗口，并把它滚到可视区中间。
+// 这是用户主动点的按钮，所以允许滚动；点日期本身仍然不会滚动。
+async function backToSelected() {
+  rebuildDateOptions()
+  await nextTick()
+  const strip = dateStrip.value
+  const el = strip?.querySelector('.date-chip-active') as HTMLElement | null
+  if (!strip || !el) return
+  const target = el.offsetLeft - (strip.clientWidth - el.clientWidth) / 2
+  try {
+    strip.scrollTo({ left: Math.max(0, target), behavior: 'smooth' })
+  } catch {
+    strip.scrollLeft = Math.max(0, target)
+  }
+}
+
+// 左右箭头 = 翻动日期条本身（往前/往后看一周），
+// **不改变选中的日期**：粉丝反馈「点箭头选中一直跑到中间」是不对的，
+// 选中只应由点击具体日期触发。所以这里只平移窗口，选中日原地不动。
 function shiftDays(delta: number) {
-  selectedDate.value = addDays(selectedDate.value, delta)
+  if (!dateOptions.value.length) {
+    rebuildDateOptions()
+    return
+  }
+  dateOptions.value = dateOptions.value.map(d => addDays(d, delta))
 }
 
 function openEditor(row: DayWorkerRow) {
@@ -904,7 +962,40 @@ function toast(msg: string, type: 'success' | 'error' = 'success') {
   setTimeout(() => (toastMsg.value = ''), 3000)
 }
 
-async function saveRecord(keepOpen: boolean) {
+// 记工前查重：这些日期若已有该工人的记工，先确认再记，避免重复记账（与月历上的 ✓ 标记配套）。
+const dupOpen = ref(false)
+const dupDates = ref<string[]>([])
+let pendingSave: { keepOpen: boolean } | null = null
+const dupMessage = computed(() => {
+  const ds = dupDates.value.map(d => d.slice(5)).join('、')
+  return '以下日期 ' + ds + ' 已经有该工人的记工记录。继续保存会再记一笔（同一天允许多笔），确定要记吗？'
+})
+
+async function findExistingDates(workerId: number, dates: string[]): Promise<string[]> {
+  const months = [...new Set(dates.map(d => d.slice(0, 7)))]
+  const hit: string[] = []
+  for (const ym of months) {
+    const [y, m] = ym.split('-').map(Number)
+    try {
+      const res = await getAttendance({ worker_id: workerId, year: y, month: m })
+      const cells: { date: string; record_count: number }[] = res.data?.code === 0 ? (res.data.data?.cells || []) : []
+      const set = new Set(cells.filter(c => c.record_count > 0).map(c => c.date))
+      for (const d of dates) if (set.has(d)) hit.push(d)
+    } catch {
+      // 查不到就不拦，交给人判断（服务端本身允许同一天多笔）
+    }
+  }
+  return hit
+}
+
+function confirmDupSave() {
+  const p = pendingSave
+  pendingSave = null
+  dupOpen.value = false
+  if (p) void saveRecord(p.keepOpen, true)
+}
+
+async function saveRecord(keepOpen: boolean, skipDupCheck = false) {
   if (!editingWorker.value) return
   const isRest = form.value.type === 'rest'
   const priceCents = isRest ? 0 : Math.round((parseFloat(priceInput.value) || 0) * 100)
@@ -929,10 +1020,21 @@ async function saveRecord(keepOpen: boolean) {
       return toast('扣款大于工钱，请改用借支或在结算里记调整项', 'error')
     }
   }
-  saving.value = true
-  const dates = !editingId.value && multiDay.value && multiDays.value.length > 0
+  const targetDates = !editingId.value && multiDay.value && multiDays.value.length > 0
     ? multiDays.value
     : [selectedDate.value]
+  // 新记工前查一次重；编辑已有记录不查（改的是同一条）。
+  if (!skipDupCheck && !editingId.value && editingWorker.value?.id) {
+    const dup = await findExistingDates(editingWorker.value.id, targetDates)
+    if (dup.length) {
+      dupDates.value = dup
+      pendingSave = { keepOpen }
+      dupOpen.value = true
+      return
+    }
+  }
+  saving.value = true
+  const dates = targetDates
   let ok = 0
   let pendingSaved = 0
   try {

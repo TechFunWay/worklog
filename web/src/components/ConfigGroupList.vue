@@ -126,6 +126,8 @@ const emit = defineEmits<{
 }>()
 
 const groupTitleMap: Record<string, string> = {
+  storage: '导出目录',
+  auto: '定时导出',
   general: '站点设置',
   access: '访问控制',
   appearance: '外观',

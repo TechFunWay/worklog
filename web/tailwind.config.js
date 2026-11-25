@@ -42,8 +42,9 @@ export default {
         destructive:          'rgb(var(--color-destructive)         / <alpha-value>)',
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'PingFang SC', 'Microsoft YaHei', 'sans-serif'],
-        display: ['Sora', 'Inter', 'system-ui', 'PingFang SC', 'sans-serif'],
+        // 只用系统字体：不依赖外网字体，内网离线也能秒开。
+        sans: ['-apple-system', 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'system-ui', 'sans-serif'],
+        display: ['PingFang SC', '-apple-system', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'system-ui', 'sans-serif'],
       },
       boxShadow: {
         soft: '0 2px 8px -2px rgba(16, 24, 40, 0.06), 0 4px 16px -4px rgba(16, 24, 40, 0.08)',

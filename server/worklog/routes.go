@@ -7,12 +7,14 @@ import (
 
 // setupRoutes 注册业务路由（认证组，user_id 数据隔离由各 handler 保证）。
 func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
+	autoExportDB = db // 供定时导出任务使用
 	g := api.Group("/worklog")
 
 	// 基础档案
 	g.GET("/workers", listWorkers(db))
 	g.POST("/workers", createWorker(db))
 	g.PUT("/workers/:id", updateWorker(db))
+	g.GET("/workers/:id/pii", workerPII(db)) // 敏感信息只给老板，列表只下发掩码
 	g.DELETE("/workers/:id", deleteWorker(db))
 	g.GET("/projects", listProjects(db))
 	g.POST("/projects", createProject(db))
@@ -101,6 +103,11 @@ func setupRoutes(api *gin.RouterGroup, db *gorm.DB) {
 	g.GET("/export/advances.csv", exportAdvancesCSV(db))
 	g.GET("/export/settlements.csv", exportSettlementsCSV(db))
 	g.GET("/export/json", exportJSON(db))
+
+	// 定时导出与导出目录选择（v0.6.1）
+	g.POST("/auto-export/run", runAutoExportNow(db))
+	g.GET("/fs/list", fsListDirs(db))
+	g.POST("/fs/mkdir", fsMkdir(db))
 
 	// 导出到 NAS 文件夹（Excel / 图片）与导出文件管理
 	g.POST("/attendance/save-xlsx", saveNasAttendanceXLSX(db))

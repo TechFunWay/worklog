@@ -45,7 +45,10 @@
         <div class="grid grid-cols-3 gap-3 py-4">
           <div>
             <div class="text-xs text-muted-foreground">工人</div>
-            <div class="font-bold text-foreground text-base mt-0.5">{{ s.worker_name }}</div>
+            <div class="flex items-center gap-1.5 mt-0.5">
+              <span class="font-bold text-foreground text-base truncate">{{ s.worker_name }}</span>
+              <span v-if="s.worker_no" class="badge bg-brand-500/10 text-brand-600 dark:text-brand-400 !px-1.5 !py-0 text-[10px]">{{ s.worker_no }}</span>
+            </div>
           </div>
           <div>
             <div class="text-xs text-muted-foreground">出工期间</div>
@@ -522,7 +525,7 @@ function copyText() {
   const sv = s.value
   if (!sv) return
   const lines: string[] = []
-  lines.push(`【工资条】${sv.worker_name}`)
+  lines.push(`【工资条】${sv.worker_name}${sv.worker_no ? `（${sv.worker_no}）` : ''}`)
   lines.push(`期间：${sv.period_start} ~ ${sv.period_end}（${sv.record_count} 笔）`)
   for (const r of detail.value.records) {
     lines.push(recordLine(r))

@@ -49,13 +49,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useAuthStore } from '../../stores/auth'
 
 defineProps<{ title: string; subtitle?: string }>()
 
 const authStore = useAuthStore()
 const siteInitial = computed(() => (authStore.siteTitle || 'S').charAt(0).toUpperCase())
+
+// 登录页性能自适应（v0.6.1）：
+// 之前只在 640px 以下降噪，但低端机/平板/老 PC 宽度可能 ≥641px，照样被三团
+// blur(90px) 无限动画 + 实时毛玻璃拖到卡顿（粉丝反馈「内网 IP 打开登录界面异常卡顿」）。
+// 这里按设备能力判断，命中就挂 .perf-lite：停动画、缩模糊、去毛玻璃。
+onMounted(() => {
+  try {
+    const nav = navigator as Navigator & { deviceMemory?: number }
+    const weakCPU = (nav.hardwareConcurrency || 8) <= 4
+    const lowMem = typeof nav.deviceMemory === 'number' && nav.deviceMemory > 0 && nav.deviceMemory <= 4
+    const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    if (weakCPU || lowMem || reduceMotion) {
+      document.querySelector('.auth-root')?.classList.add('perf-lite')
+    }
+  } catch { /* 取不到能力信息就按正常效果 */ }
+})
 </script>
 
 <style scoped>
@@ -265,6 +281,22 @@ const siteInitial = computed(() => (authStore.siteTitle || 'S').charAt(0).toUppe
   .aurora { animation: none; }
   .auth-card::before { animation: none; }
 }
+
+/* 低配/弱设备降噪（v0.6.1，由脚本按 CPU/内存/减少动效挂 .perf-lite）：
+   覆盖「宽度 ≥641px 但设备弱」的场景——手机横屏、平板、老 PC、部分内置浏览器。 */
+.perf-lite .aurora {
+  animation: none;
+  filter: blur(40px);
+  will-change: auto;
+}
+.perf-lite .auth-card::before { animation: none; }
+.perf-lite .auth-card {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background: rgba(15, 15, 26, 0.92);
+}
+.perf-lite .grid-overlay,
+.perf-lite .grain { display: none; }
 
 /* 手机端降噪（v0.2.1）：登录页是手机上的第一屏，此前三团极光带 blur(90px) 无限漂浮、
    卡片实时毛玻璃叠在会动的背景上（每帧重算）、流光边框动画的是 CSS 自定义属性

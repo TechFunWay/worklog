@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap');
+/* v0.6.1：不再从 Google Fonts 拉取 Inter/Sora。
+   该样式表是阻塞渲染的，内网/无外网环境下会一直等到超时（实测 151 内网首屏因此多等 1.7s 以上，
+   这正是粉丝反馈「内网 IP 打开登录页异常卡顿」的根因）。改用系统字体栈，零外部依赖。 */
 
 @import './styles/themes.css';
 

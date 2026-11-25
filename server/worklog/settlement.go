@@ -706,6 +706,26 @@ func batchSettlement(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// fillSettlementWorkerNo 给结算单补工人的工号（同姓名区分用；非敏感，可下发）。
+func fillSettlementWorkerNo(db *gorm.DB, items []Settlement) {
+	if len(items) == 0 {
+		return
+	}
+	ids := make([]uint, 0, len(items))
+	for _, s := range items {
+		ids = append(ids, s.WorkerID)
+	}
+	var ws []Worker
+	db.Where("id IN ?", ids).Find(&ws)
+	no := map[uint]string{}
+	for _, w := range ws {
+		no[w.ID] = w.WorkerNo
+	}
+	for i := range items {
+		items[i].WorkerNo = no[items[i].WorkerID]
+	}
+}
+
 func listSettlements(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		uid := currentUID(c)
@@ -743,6 +763,7 @@ func listSettlements(db *gorm.DB) gin.HandlerFunc {
 		for i := range items {
 			fillSettlementDerived(&items[i], int(stats[items[i].ID].Cnt))
 		}
+		fillSettlementWorkerNo(db, items)
 		response.SuccessPage(c, items, total, page, pageSize)
 	}
 }
@@ -770,6 +791,7 @@ func getSettlement(db *gorm.DB) gin.HandlerFunc {
 		fillPaymentNames(db, payments, item.WorkerName)
 		item.Payments = payments
 		fillSettlementDerived(&item, len(payments))
+		fillSettlementWorkerNo(db, []Settlement{item})
 		response.Success(c, item)
 	}
 }

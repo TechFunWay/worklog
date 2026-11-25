@@ -17,6 +17,7 @@
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <span class="font-semibold text-foreground truncate">{{ w.name }}</span>
+              <span v-if="w.worker_no" class="badge bg-brand-500/10 text-brand-600 dark:text-brand-400 !px-1.5 !py-0 text-[10px]">{{ w.worker_no }}</span>
               <span class="badge" :class="w.status === 'active' ? 'bg-emerald-400/15 text-emerald-600 dark:text-emerald-400' : 'bg-muted text-muted-foreground'">
                 {{ w.status === 'active' ? '在工' : '已归档' }}
               </span>
@@ -26,6 +27,7 @@
               <template v-if="w.monthly_wage_cents">月薪 {{ fmtMoney(w.monthly_wage_cents) }}（按当月天数折算日薪）</template>
               <template v-else>日薪 {{ fmtMoney(w.daily_wage_cents) }} · 时薪 {{ fmtMoney(w.hourly_wage_cents) }}</template>
               <template v-if="w.subsidy_cents"> · 补贴 {{ fmtMoney(w.subsidy_cents) }}/出勤日</template>
+              <template v-if="w.bank_card_masked"> · 卡 {{ w.bank_card_masked }}</template>
             </div>
             <div v-if="w.note" class="text-xs text-muted-foreground/80 mt-0.5 truncate">{{ w.note }}</div>
           </div>
@@ -71,9 +73,33 @@
           <input v-model="form.phone" class="input-field" placeholder="选填" />
         </div>
         <div>
+          <label class="text-sm font-medium text-foreground block mb-1.5">工号</label>
+          <input v-model="workerNoInput" class="input-field" placeholder="选填，如 W02；同姓名工人靠它区分" maxlength="20" />
+        </div>
+        <div>
           <label class="text-sm font-medium text-foreground block mb-1.5">备注</label>
           <input v-model="form.note" class="input-field" placeholder="选填" />
         </div>
+        <!-- 敏感信息：只有老板能填能看；不填不影响任何功能 -->
+        <template v-if="isBoss">
+          <div class="rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 leading-relaxed">
+            身份证与银行卡属敏感信息：加密保存在你自己的 NAS 上，列表只显示掩码，仅你可查看与导出。均选填。
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-sm font-medium text-foreground block mb-1.5">身份证号</label>
+              <input v-model="idCardInput" class="input-field" placeholder="选填，18 位" maxlength="18" />
+            </div>
+            <div>
+              <label class="text-sm font-medium text-foreground block mb-1.5">开户行</label>
+              <input v-model="bankNameInput" class="input-field" placeholder="选填，如 工商银行" maxlength="30" />
+            </div>
+          </div>
+          <div>
+            <label class="text-sm font-medium text-foreground block mb-1.5">银行卡号</label>
+            <input v-model="bankCardInput" class="input-field tabular-nums" placeholder="选填，12-19 位，用于导出工资表代发" maxlength="25" />
+          </div>
+        </template>
         <div class="flex gap-3">
           <button type="button" class="btn-ghost min-h-11 flex-1" @click="closeForm">取消</button>
           <button type="button" class="btn-brand min-h-11 flex-1" :disabled="saving" @click="save">保存</button>
@@ -87,12 +113,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import PageHeader from '../components/PageHeader.vue'
 import Modal from '../components/Modal.vue'
 import ConfirmDialog from '../components/ConfirmDialog.vue'
 import Toast from '../components/Toast.vue'
-import { listWorkers, createWorker, updateWorker, deleteWorker, MAX_SUBSIDY_CENTS, type Worker } from '../api/worklog'
+import { listWorkers, createWorker, updateWorker, deleteWorker, getWorkerPII, MAX_SUBSIDY_CENTS, type Worker } from '../api/worklog'
+import { useWorklogStore } from '../stores/worklog'
 import { fmtMoney, yuanToCents, centsToYuanInput } from '../utils/format'
 
 const workers = ref<Worker[]>([])
@@ -106,6 +133,13 @@ const hourlyInput = ref('')
 const monthlyInput = ref('')
 // 档案级默认补贴（元/出勤日）：记工满 1 个工时自动带出的那一层
 const subsidyInput = ref('')
+// 工号与敏感信息（选填）。身份证/银行卡只有老板能填能看，列表只回掩码。
+const workerNoInput = ref('')
+const idCardInput = ref('')
+const bankCardInput = ref('')
+const bankNameInput = ref('')
+const store = useWorklogStore()
+const isBoss = computed(() => store.isBoss)
 
 async function load() {
   try {
@@ -114,13 +148,29 @@ async function load() {
   } catch {}
 }
 
-function openForm(w?: Worker) {
+async function openForm(w?: Worker) {
   form.value = w ? { ...w } : { name: '', status: 'active' }
   dailyInput.value = centsToYuanInput(w?.daily_wage_cents)
   hourlyInput.value = centsToYuanInput(w?.hourly_wage_cents)
   monthlyInput.value = centsToYuanInput(w?.monthly_wage_cents)
   subsidyInput.value = centsToYuanInput(w?.subsidy_cents)
+  workerNoInput.value = w?.worker_no || ''
+  idCardInput.value = ''
+  bankCardInput.value = ''
+  bankNameInput.value = w?.bank_name || ''
   formOpen.value = true
+  // 编辑时回填敏感信息明文（仅老板；列表接口只给掩码）
+  if (w?.id && isBoss.value) {
+    try {
+      const res = await getWorkerPII(w.id)
+      if (res.data?.code === 0 && res.data.data) {
+        idCardInput.value = res.data.data.id_card || ''
+        bankCardInput.value = res.data.data.bank_card || ''
+        bankNameInput.value = res.data.data.bank_name || ''
+        workerNoInput.value = res.data.data.worker_no || workerNoInput.value
+      }
+    } catch {}
+  }
 }
 
 // 取消：只关闭弹窗，不提交表单。
@@ -164,7 +214,17 @@ async function save() {
   if (daily === null || hourly === null || monthly === null || subsidy === null) return toast('薪资与补贴请填非负数字（最多两位小数）', 'error')
   if (subsidy > MAX_SUBSIDY_CENTS) return toast('默认补贴过大，上限 100 万元', 'error')
   saving.value = true
-  const payload: Worker = { ...form.value, daily_wage_cents: daily, hourly_wage_cents: hourly, monthly_wage_cents: monthly, subsidy_cents: subsidy }
+  const payload: Worker = {
+    ...form.value,
+    daily_wage_cents: daily, hourly_wage_cents: hourly, monthly_wage_cents: monthly, subsidy_cents: subsidy,
+    worker_no: workerNoInput.value.trim(),
+    bank_name: bankNameInput.value.trim(),
+  }
+  // 敏感信息只在老板编辑时上行（非老板页面没有这两个输入框，避免误清空）
+  if (isBoss.value) {
+    payload.id_card = idCardInput.value.trim()
+    payload.bank_card = bankCardInput.value.trim()
+  }
   try {
     if (payload.id) await updateWorker(payload.id, payload)
     else await createWorker(payload)
